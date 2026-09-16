@@ -41,3 +41,9 @@ include(":engine:world")
 include(":feature:play")
 include(":feature:forge")
 include(":content:igbo")
+
+// The original engine, moved out of :app and split along the layering it
+// already had. Being ported feature by feature onto the new architecture.
+include(":legacy:domain")
+include(":legacy:data")
+include(":feature:studio")
