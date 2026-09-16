@@ -4,7 +4,16 @@ import com.stratum.core.domain.content.BiomeDefinition
 import com.stratum.core.domain.content.ContentPack
 import com.stratum.core.domain.content.ContentPackAssembler
 import com.stratum.core.domain.content.DepositRule
+import com.stratum.core.domain.actor.EnemyDefinition
+import com.stratum.core.domain.actor.SkillDefinition
+import com.stratum.core.domain.actor.SkillShape
+import com.stratum.core.domain.combat.CombatStats
+import com.stratum.core.domain.combat.DamageTypeDefinition
 import com.stratum.core.domain.content.HeroClassDefinition
+import com.stratum.core.domain.item.AffixDefinition
+import com.stratum.core.domain.item.AffixKind
+import com.stratum.core.domain.item.AffixStat
+import com.stratum.core.domain.item.WeaponBase
 import com.stratum.core.domain.content.ScatterRule
 import com.stratum.core.domain.world.BlockMaterial
 import com.stratum.core.domain.world.BlockType
@@ -56,12 +65,145 @@ object TestContent {
         scatter = emptyList(),
     )
 
+    // ---- combat fixtures -------------------------------------------------
+
+    val physical = DamageTypeDefinition("test:physical", "Physical")
+    val fire = DamageTypeDefinition("test:fire", "Fire")
+
+    val club = WeaponBase(
+        id = "test:club",
+        name = "Club",
+        minDamage = 8,
+        maxDamage = 12,
+        attackSpeed = 1.2f,
+        attackRange = 1,
+        damageTypeId = physical.id,
+        toolTier = 1,
+        minItemLevel = 1,
+        weight = 100,
+    )
+
+    val pick = WeaponBase(
+        id = "test:pick",
+        name = "Pick",
+        minDamage = 6,
+        maxDamage = 10,
+        attackSpeed = 1.1f,
+        damageTypeId = physical.id,
+        toolTier = 3,
+        minItemLevel = 1,
+        weight = 100,
+    )
+
+    /** Deliberately gated, so item-level rules have something to exclude. */
+    val greatsword = WeaponBase(
+        id = "test:greatsword",
+        name = "Greatsword",
+        minDamage = 25,
+        maxDamage = 40,
+        attackSpeed = 0.7f,
+        damageTypeId = fire.id,
+        toolTier = 2,
+        minItemLevel = 15,
+        weight = 100,
+    )
+
+    val lateAffix = AffixDefinition(
+        "test:of_depths", "of Depths", AffixKind.SUFFIX, AffixStat.MAX_HEALTH,
+        40f, 90f, minItemLevel = 20,
+    )
+
+    val affixes = listOf(
+        AffixDefinition("test:sharp", "Sharp", AffixKind.PREFIX, AffixStat.ATTACK_POWER, 2f, 8f),
+        AffixDefinition("test:heavy", "Heavy", AffixKind.PREFIX, AffixStat.MAX_HEALTH, 5f, 20f),
+        AffixDefinition("test:keen", "Keen", AffixKind.PREFIX, AffixStat.CRIT_CHANCE, 0.02f, 0.08f),
+        AffixDefinition("test:pitted", "Pitted", AffixKind.PREFIX, AffixStat.MINING_SPEED, 0.1f, 0.5f),
+        AffixDefinition("test:plated", "Plated", AffixKind.PREFIX, AffixStat.ARMOUR, 1f, 6f),
+        AffixDefinition("test:of_embers", "of Embers", AffixKind.SUFFIX, AffixStat.RESISTANCE, 0.1f, 0.3f, damageTypeId = fire.id),
+        AffixDefinition("test:of_blood", "of Blood", AffixKind.SUFFIX, AffixStat.LIFE_STEAL, 0.02f, 0.1f),
+        lateAffix,
+    )
+
+    val weapons = listOf(club, pick, greatsword)
+
+    val rat = EnemyDefinition(
+        id = "test:rat",
+        name = "Rat",
+        baseStats = CombatStats(maxHealth = 20, attackPower = 4, attackSpeed = 1f, attackRange = 1),
+        damageTypeId = physical.id,
+        moveSpeed = 2f,
+        aggroRange = 8,
+        experience = 10,
+        spawnWeight = 100,
+    )
+
+    val emberling = EnemyDefinition(
+        id = "test:emberling",
+        name = "Emberling",
+        baseStats = CombatStats(maxHealth = 15, attackPower = 6, attackSpeed = 1f, attackRange = 2),
+        damageTypeId = fire.id,
+        moveSpeed = 3f,
+        aggroRange = 10,
+        fleeBelowHealth = 0.3f,
+        canFlee = true,
+        experience = 15,
+        spawnBiomeIds = listOf("test:highlands"),
+        spawnWeight = 100,
+    )
+
+    val enemies = listOf(rat, emberling)
+
+    val strike = SkillDefinition(
+        id = "test:strike",
+        name = "Strike",
+        damageTypeId = physical.id,
+        powerMultiplier = 2f,
+        resourceCost = 10,
+        cooldownSeconds = 3f,
+        shape = SkillShape.STRIKE,
+        range = 3,
+    )
+
+    val nova = SkillDefinition(
+        id = "test:nova",
+        name = "Nova",
+        damageTypeId = fire.id,
+        powerMultiplier = 1.5f,
+        resourceCost = 20,
+        cooldownSeconds = 5f,
+        shape = SkillShape.NOVA,
+        range = 4,
+    )
+
+    val lance = SkillDefinition(
+        id = "test:lance",
+        name = "Lance",
+        damageTypeId = fire.id,
+        powerMultiplier = 1.8f,
+        resourceCost = 15,
+        cooldownSeconds = 4f,
+        shape = SkillShape.LANCE,
+        range = 6,
+    )
+
+    val skills = listOf(strike, nova, lance)
+
     val digger = HeroClassDefinition(
         id = "test:digger",
         name = "Digger",
         baseHealth = 120,
         baseResource = 40,
         startingBlockIds = listOf(soil.id, stone.id),
+        abilityIds = listOf(strike.id, nova.id, lance.id),
+        baseStats = CombatStats(
+            maxHealth = 120,
+            attackPower = 20,
+            armour = 0,
+            critChance = 0f,
+            attackSpeed = 1f,
+            attackRange = 1,
+        ),
+        startingWeaponId = club.id,
     )
 
     val pack = ContentPack(
@@ -71,6 +213,11 @@ object TestContent {
         blocks = listOf(soil, stone, sand, torch, ore, leaves),
         biomes = listOf(plains, highlands),
         heroClasses = listOf(digger),
+        damageTypes = listOf(physical, fire),
+        affixes = affixes,
+        weapons = weapons,
+        enemies = enemies,
+        skills = skills,
     )
 
     val assembled = ContentPackAssembler().assemble(listOf(pack))

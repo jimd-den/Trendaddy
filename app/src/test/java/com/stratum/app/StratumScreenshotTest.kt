@@ -51,6 +51,22 @@ class StratumScreenshotTest {
         val content = GameSetup.assemble()
         val session = WorldSession(content, WorldConfig(seed = 99L, simulationRadius = 2))
 
+        // Run the world forward so the shot shows a live fight rather than an
+        // empty field: monsters spawn, close in, and chip the player's health.
+        repeat(40) { session.tick(0.25f) }
+        val slain = content.enemies.first()
+        session.dropLoot(
+            com.stratum.engine.world.LootRoller(content.weapons, content.affixes)
+                .craft(
+                    content.weapons.last(),
+                    itemLevel = 24,
+                    rarity = com.stratum.core.domain.item.ItemRarity.EPIC,
+                    random = kotlin.random.Random(5),
+                ),
+            session.player.position.translated(2f, 1f, 0f),
+        )
+        session.spawn(slain, session.player.position.translated(3f, -1f, 0f))
+
         composeTestRule.setContent {
             StratumTheme(palette = content.palette, darkTheme = true) {
                 PlayScreenContent(
@@ -60,6 +76,9 @@ class StratumScreenshotTest {
                         projection = IsometricProjection(zoom = 1f),
                         palette = content.palette,
                         biomeName = session.currentBiome.name,
+                        enemies = session.enemies,
+                        groundLoot = session.groundLoot,
+                        skills = session.skills,
                     ),
                     world = session.world,
                     modifier = Modifier.fillMaxSize(),

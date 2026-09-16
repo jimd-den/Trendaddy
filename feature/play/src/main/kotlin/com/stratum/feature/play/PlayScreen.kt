@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -33,6 +34,7 @@ import com.stratum.core.designsystem.component.StratumProgressSliver
 import com.stratum.core.designsystem.theme.Cut
 import com.stratum.core.designsystem.theme.Space
 import com.stratum.core.designsystem.theme.StratumTheme
+import com.stratum.core.domain.actor.SkillDefinition
 import com.stratum.core.domain.world.World
 
 /**
@@ -59,6 +61,8 @@ fun PlayScreen(
         onSelectSlot = viewModel::selectSlot,
         onZoom = viewModel::zoom,
         onStopMining = viewModel::stopMining,
+        onAttack = viewModel::attack,
+        onCastSkill = viewModel::castSkill,
         onOpenMenu = onOpenMenu,
     )
 }
@@ -75,6 +79,8 @@ fun PlayScreenContent(
     onSelectSlot: (Int) -> Unit = {},
     onZoom: (Float) -> Unit = {},
     onStopMining: () -> Unit = {},
+    onAttack: () -> Unit = {},
+    onCastSkill: (String) -> Unit = {},
     onOpenMenu: () -> Unit = {},
 ) {
     val colors = StratumTheme.colors
@@ -87,7 +93,12 @@ fun PlayScreenContent(
                 projection = state.projection,
                 highlight = state.miningTarget,
                 playerPosition = state.player.position,
+                playerFacing = state.player.facing,
+                playerAccent = colors.accent,
+                enemies = state.enemies,
+                groundLoot = state.groundLoot,
                 revision = state.worldRevision,
+                frame = state.frame,
                 modifier = Modifier.fillMaxSize(),
                 onTapBlock = onTapBlock,
                 onLongPressBlock = onLongPressBlock,
@@ -109,6 +120,35 @@ fun PlayScreenContent(
                 )
                 Spacer(Modifier.height(Space.small))
                 ZoomControls(onZoom = onZoom)
+            }
+
+            if (state.isDead) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(colors.surface.copy(alpha = 0.82f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "YOU HAVE FALLEN",
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = colors.danger,
+                        )
+                        Spacer(Modifier.height(Space.small))
+                        Text(
+                            text = "Level ${state.player.level} · ${state.biomeName}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.inkMuted,
+                        )
+                        Spacer(Modifier.height(Space.large))
+                        StratumAction(
+                            label = "Return",
+                            onClick = onOpenMenu,
+                            emphasis = ActionEmphasis.PRIMARY,
+                        )
+                    }
+                }
             }
 
             if (state.miningTarget != null) {
@@ -135,6 +175,8 @@ fun PlayScreenContent(
             onMove = onMove,
             onSelectSlot = onSelectSlot,
             onStopMining = onStopMining,
+            onAttack = onAttack,
+            onCastSkill = onCastSkill,
         )
     }
 }
@@ -166,6 +208,27 @@ private fun VitalsOverlay(
             max = state.player.maxResource,
             tint = colors.accentAlt,
         )
+        Spacer(Modifier.height(Space.tight))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = "LV ${state.player.level}",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.accent,
+            )
+            Text(
+                text = "${(state.player.experienceFraction * 100).toInt()}%",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkMuted,
+            )
+        }
+        Spacer(Modifier.height(Space.hair))
+        StratumProgressSliver(
+            fraction = state.player.experienceFraction,
+            tint = colors.accent,
+        )
     }
 }
 
@@ -189,6 +252,8 @@ private fun ControlBand(
     onMove: (Float, Float) -> Unit,
     onSelectSlot: (Int) -> Unit,
     onStopMining: () -> Unit,
+    onAttack: () -> Unit,
+    onCastSkill: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = StratumTheme.colors
@@ -222,12 +287,58 @@ private fun ControlBand(
 
             Column(horizontalAlignment = Alignment.End) {
                 Text(
-                    text = "Tier ${state.player.toolTier} tools",
+                    text = state.player.equippedWeapon?.name ?: "Bare hands",
                     style = MaterialTheme.typography.labelSmall,
                     color = colors.inkMuted,
                 )
                 Spacer(Modifier.height(Space.small))
+                StratumAction(
+                    label = "Strike",
+                    onClick = onAttack,
+                    emphasis = ActionEmphasis.DESTRUCTIVE,
+                )
+                Spacer(Modifier.height(Space.small))
                 Hotbar(state = state, world = world, onSelectSlot = onSelectSlot)
+            }
+        }
+
+        if (state.skills.isNotEmpty()) {
+            Spacer(Modifier.height(Space.medium))
+            SkillBar(state = state, onCastSkill = onCastSkill)
+        }
+    }
+}
+
+/**
+ * The skill row. A skill on cooldown stays visible and dimmed rather than
+ * disappearing, so the bar does not reflow under the player's thumb mid-fight.
+ */
+@Composable
+private fun SkillBar(
+    state: PlayUiState,
+    onCastSkill: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = StratumTheme.colors
+    LazyRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(Space.small),
+    ) {
+        items(state.skills, key = SkillDefinition::id) { skill ->
+            val cooling = state.cooldownFraction(skill)
+            val ready = cooling <= 0f && state.canAfford(skill)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                StratumChip(
+                    label = skill.name,
+                    selected = ready,
+                    onClick = { onCastSkill(skill.id) },
+                    swatch = Color(skill.color),
+                )
+                Spacer(Modifier.height(Space.hair))
+                StratumProgressSliver(
+                    fraction = 1f - cooling,
+                    tint = if (state.canAfford(skill)) colors.accentAlt else colors.danger,
+                )
             }
         }
     }

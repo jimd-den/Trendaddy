@@ -1,5 +1,6 @@
 package com.stratum.content.igbo
 
+import com.stratum.core.domain.combat.CombatStats
 import com.stratum.core.domain.content.ContentPack
 import com.stratum.core.domain.content.HeroClassDefinition
 import com.stratum.core.domain.content.LoreCategory
@@ -49,6 +50,16 @@ object IgboContentPack {
             insight = 8,
             startingBlockIds = listOf(IgboPackBlocks.redEarth.id, IgboPackBlocks.graniteStone.id),
             abilityIds = listOf("$NS:mma_nkwu_cleave", "$NS:ikenga_tremor"),
+            baseStats = CombatStats(
+                maxHealth = 260,
+                attackPower = 14,
+                armour = 6,
+                critChance = 0.08f,
+                critMultiplier = 1.5f,
+                attackSpeed = 1f,
+                attackRange = 1,
+            ),
+            startingWeaponId = IgboPackCombat.weapons[1].id,
         ),
         HeroClassDefinition(
             id = "$NS:amadioha_invoker",
@@ -64,6 +75,17 @@ object IgboContentPack {
             insight = 18,
             startingBlockIds = listOf(IgboPackBlocks.obsidianCrag.id),
             abilityIds = listOf("$NS:thunder_spear", "$NS:shockwave_spark"),
+            baseStats = CombatStats(
+                maxHealth = 180,
+                attackPower = 18,
+                armour = 1,
+                critChance = 0.12f,
+                critMultiplier = 1.7f,
+                attackSpeed = 1f,
+                attackRange = 2,
+                resistances = mapOf(IgboPackCombat.thunder.id to 0.25f),
+            ),
+            startingWeaponId = IgboPackCombat.weapons[2].id,
         ),
         HeroClassDefinition(
             id = "$NS:dibia_nzu",
@@ -79,6 +101,18 @@ object IgboContentPack {
             insight = 17,
             startingBlockIds = listOf(IgboPackBlocks.nsibidiSeal.id, IgboPackBlocks.groveTurf.id),
             abilityIds = listOf("$NS:venom_geyser", "$NS:solar_supernova"),
+            baseStats = CombatStats(
+                maxHealth = 200,
+                attackPower = 15,
+                armour = 3,
+                critChance = 0.1f,
+                critMultiplier = 1.6f,
+                attackSpeed = 1f,
+                attackRange = 3,
+                resistances = mapOf(IgboPackCombat.venom.id to 0.3f),
+                lifeSteal = 0.05f,
+            ),
+            startingWeaponId = IgboPackCombat.weapons[4].id,
         ),
         HeroClassDefinition(
             id = "$NS:ikenga_berserker",
@@ -94,6 +128,16 @@ object IgboContentPack {
             insight = 6,
             startingBlockIds = listOf(IgboPackBlocks.catacombMasonry.id),
             abilityIds = listOf("$NS:ikenga_tremor", "$NS:mma_nkwu_cleave"),
+            baseStats = CombatStats(
+                maxHealth = 300,
+                attackPower = 20,
+                armour = 2,
+                critChance = 0.14f,
+                critMultiplier = 1.8f,
+                attackSpeed = 1.25f,
+                attackRange = 1,
+            ),
+            startingWeaponId = IgboPackCombat.weapons[0].id,
         ),
     )
 
@@ -159,12 +203,18 @@ object IgboContentPack {
         author = "Stratum",
         version = "2.0.0",
         description = "The built-in pack: five regions of Igbo mythology rendered as a mineable " +
-            "voxel world, with bronze at the bottom of it.",
+            "voxel world, with bronze at the bottom of it and something in it that bites.",
         origin = PackOrigin.BUILT_IN,
         palette = palette,
         blocks = IgboPackBlocks.all,
         biomes = IgboPackBiomes.all,
         heroClasses = heroClasses,
         loreEntries = lore,
+        damageTypes = IgboPackCombat.damageTypes,
+        affixes = IgboPackCombat.affixes,
+        weapons = IgboPackCombat.weapons,
+        enemies = IgboPackCombat.enemies,
+        skills = IgboPackCombat.skills,
+        rarityStyles = IgboPackCombat.rarityStyles,
     )
 }

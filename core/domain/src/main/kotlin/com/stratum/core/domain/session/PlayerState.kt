@@ -1,6 +1,10 @@
 package com.stratum.core.domain.session
 
+import com.stratum.core.domain.actor.Progression
+import com.stratum.core.domain.actor.SkillCooldowns
+import com.stratum.core.domain.combat.CombatStats
 import com.stratum.core.domain.content.HeroClassDefinition
+import com.stratum.core.domain.item.ItemInstance
 import com.stratum.core.domain.world.BlockPos
 import com.stratum.core.domain.world.Direction
 import com.stratum.core.domain.world.WorldPoint
@@ -24,6 +28,17 @@ data class PlayerState(
     val hotbar: List<String> = emptyList(),
     val selectedSlot: Int = 0,
     val inventory: Map<String, Int> = emptyMap(),
+    val level: Int = 1,
+    val experience: Int = 0,
+    /** The class's baseline, before gear and levels. */
+    val baseStats: CombatStats = CombatStats(),
+    val equippedWeapon: ItemInstance? = null,
+    /** Loot picked up but not equipped. */
+    val bag: List<ItemInstance> = emptyList(),
+    val skillIds: List<String> = emptyList(),
+    val cooldowns: SkillCooldowns = SkillCooldowns(),
+    /** Counts down between basic attacks, from the weapon's speed. */
+    val attackCooldown: Float = 0f,
 ) {
     val blockPos: BlockPos get() = position.toBlockPos()
 
@@ -32,6 +47,68 @@ data class PlayerState(
 
     val selectedBlockId: String?
         get() = hotbar.getOrNull(selectedSlot)
+
+    /**
+     * The stats combat actually uses: the class baseline, plus what levelling
+     * granted, plus whatever is equipped. Computed rather than stored so
+     * swapping a weapon cannot leave a stale number behind.
+     */
+    val combatStats: CombatStats
+        get() {
+            val levelled = baseStats.copy(
+                maxHealth = baseStats.maxHealth + Progression.healthBonusFor(level),
+                attackPower = baseStats.attackPower + Progression.attackBonusFor(level),
+            )
+            val weapon = equippedWeapon ?: return levelled
+            val combined = levelled + weapon.toStats()
+            // Attack speed is a base of 1 plus bonuses; the weapon replaces the
+            // base rather than adding to it, or a fast weapon would also inherit
+            // the fists it replaced.
+            return combined.copy(
+                attackSpeed = weapon.baseAttackSpeed + weapon.toStats().attackSpeed,
+                attackRange = weapon.attackRange,
+            )
+        }
+
+    val maxHealthWithGear: Int get() = combatStats.maxHealth
+
+    val toolTierWithGear: Int get() = maxOf(toolTier, equippedWeapon?.toolTier ?: 0)
+
+    val experienceForNextLevel: Int get() = Progression.experienceForNextLevel(level)
+
+    val experienceFraction: Float
+        get() {
+            val needed = experienceForNextLevel
+            return if (needed <= 0 || needed == Int.MAX_VALUE) 1f
+            else (experience.toFloat() / needed).coerceIn(0f, 1f)
+        }
+
+    fun damaged(amount: Int): PlayerState = copy(health = (health - amount).coerceAtLeast(0))
+
+    fun healed(amount: Int): PlayerState =
+        copy(health = (health + amount).coerceAtMost(maxHealthWithGear))
+
+    /**
+     * Equips an item, moving whatever was held into the bag rather than
+     * destroying it, and tops health up to the new maximum so a health affix is
+     * felt immediately.
+     */
+    fun equipping(item: ItemInstance): PlayerState {
+        val previous = equippedWeapon
+        val updated = copy(
+            equippedWeapon = item,
+            bag = (bag - item) + listOfNotNull(previous),
+        )
+        return updated.copy(health = health.coerceAtMost(updated.maxHealthWithGear))
+    }
+
+    fun collecting(item: ItemInstance): PlayerState = copy(bag = bag + item)
+
+    /** True when the item beats what is held on raw damage. */
+    fun isUpgrade(item: ItemInstance): Boolean {
+        val current = equippedWeapon ?: return true
+        return item.toStats().attackPower > current.toStats().attackPower
+    }
 
     val isAlive: Boolean get() = health > 0
 
@@ -63,6 +140,8 @@ data class PlayerState(
             resourceName = hero.resourceName,
             hotbar = hero.startingBlockIds,
             inventory = hero.startingBlockIds.associateWith { STARTING_STACK },
+            baseStats = hero.resolvedStats,
+            skillIds = hero.abilityIds,
         )
 
         const val STARTING_STACK = 32

@@ -1,5 +1,13 @@
 package com.stratum.core.domain.content
 
+import com.stratum.core.domain.actor.EnemyDefinition
+import com.stratum.core.domain.actor.SkillDefinition
+import com.stratum.core.domain.combat.CombatStats
+import com.stratum.core.domain.combat.DamageTypeDefinition
+import com.stratum.core.domain.item.AffixDefinition
+import com.stratum.core.domain.item.ItemRarity
+import com.stratum.core.domain.item.RarityStyle
+import com.stratum.core.domain.item.WeaponBase
 import com.stratum.core.domain.world.BlockType
 
 /**
@@ -23,6 +31,14 @@ data class ContentPack(
     val heroClasses: List<HeroClassDefinition> = emptyList(),
     val loreEntries: List<LoreEntry> = emptyList(),
     val spriteSetIds: List<String> = emptyList(),
+    // The action RPG half. A pack that supplies none of these is a world you can
+    // dig but not fight in, which is a legitimate thing for a pack to be.
+    val damageTypes: List<DamageTypeDefinition> = emptyList(),
+    val affixes: List<AffixDefinition> = emptyList(),
+    val weapons: List<WeaponBase> = emptyList(),
+    val enemies: List<EnemyDefinition> = emptyList(),
+    val skills: List<SkillDefinition> = emptyList(),
+    val rarityStyles: List<RarityStyle> = emptyList(),
 ) {
     val blockCount: Int get() = blocks.size
 
@@ -30,6 +46,9 @@ data class ContentPack(
 
     /** A pack with no blocks and no biomes cannot generate a world. */
     val isPlayable: Boolean get() = blocks.isNotEmpty() && biomes.isNotEmpty()
+
+    /** Whether there is anything to fight and anything to fight it with. */
+    val hasCombat: Boolean get() = enemies.isNotEmpty() && weapons.isNotEmpty()
 }
 
 enum class PackOrigin { BUILT_IN, AI_GENERATED, IMPORTED }
@@ -106,7 +125,19 @@ data class HeroClassDefinition(
     val startingBlockIds: List<String> = emptyList(),
     val abilityIds: List<String> = emptyList(),
     val spriteSetId: String? = null,
-)
+    /** Combat baseline before gear and levels. */
+    val baseStats: CombatStats = CombatStats(),
+    /** The weapon the class starts holding. */
+    val startingWeaponId: String? = null,
+) {
+    /**
+     * Health lives on both [baseHealth] and [baseStats] because packs wrote the
+     * former first. The stats block is the one combat reads, so it takes
+     * [baseHealth] when it has not been given its own.
+     */
+    val resolvedStats: CombatStats
+        get() = if (baseStats.maxHealth > 0) baseStats else baseStats.copy(maxHealth = baseHealth)
+}
 
 /** A codex entry. AI lore generation writes these; the codex screen reads them. */
 data class LoreEntry(
