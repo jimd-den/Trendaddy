@@ -1,0 +1,7 @@
+/build
+!/build/outputs/apk/**
+!*.apk
+
+*.aar
+*.aab
+*.ap_

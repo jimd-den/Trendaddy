@@ -1,0 +1,28 @@
+*.iml
+.gradle
+.kotlin
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+.env
+debug.keystore
+
+# Allow APK builds in git
+!*.apk
+!**/*.apk
+!/apk/
+!/apk/**
+
+# Other packaging artifacts
+*.aar
+*.aab
+*.ap_
