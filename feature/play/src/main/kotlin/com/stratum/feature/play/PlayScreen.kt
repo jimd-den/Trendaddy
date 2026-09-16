@@ -1,0 +1,297 @@
+package com.stratum.feature.play
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.stratum.core.designsystem.component.ActionEmphasis
+import com.stratum.core.designsystem.component.SectionLabel
+import com.stratum.core.designsystem.component.StratumAction
+import com.stratum.core.designsystem.component.StratumChip
+import com.stratum.core.designsystem.component.StratumMeter
+import com.stratum.core.designsystem.component.StratumPanel
+import com.stratum.core.designsystem.component.StratumProgressSliver
+import com.stratum.core.designsystem.theme.Cut
+import com.stratum.core.designsystem.theme.Space
+import com.stratum.core.designsystem.theme.StratumTheme
+import com.stratum.core.domain.world.World
+
+/**
+ * The play screen: world on top, controls below.
+ *
+ * The HUD deliberately sits in a band under the viewport rather than floating
+ * over it. On a phone held in one hand, controls overlaid on an isometric world
+ * cover the thing you are trying to aim at.
+ */
+@Composable
+fun PlayScreen(
+    viewModel: PlayViewModel,
+    modifier: Modifier = Modifier,
+    onOpenMenu: () -> Unit = {},
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    PlayScreenContent(
+        state = state,
+        world = viewModel.world,
+        modifier = modifier,
+        onTapBlock = viewModel::beginMining,
+        onLongPressBlock = viewModel::place,
+        onMove = viewModel::move,
+        onSelectSlot = viewModel::selectSlot,
+        onZoom = viewModel::zoom,
+        onStopMining = viewModel::stopMining,
+        onOpenMenu = onOpenMenu,
+    )
+}
+
+/** Stateless body, so it can be previewed and screenshot-tested without a view model. */
+@Composable
+fun PlayScreenContent(
+    state: PlayUiState,
+    world: World,
+    modifier: Modifier = Modifier,
+    onTapBlock: (com.stratum.core.domain.world.BlockPos) -> Unit = {},
+    onLongPressBlock: (com.stratum.core.domain.world.BlockPos) -> Unit = {},
+    onMove: (Float, Float) -> Unit = { _, _ -> },
+    onSelectSlot: (Int) -> Unit = {},
+    onZoom: (Float) -> Unit = {},
+    onStopMining: () -> Unit = {},
+    onOpenMenu: () -> Unit = {},
+) {
+    val colors = StratumTheme.colors
+
+    Column(modifier = modifier.fillMaxSize().background(colors.surface)) {
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            WorldCanvas(
+                world = world,
+                camera = state.camera,
+                projection = state.projection,
+                highlight = state.miningTarget,
+                playerPosition = state.player.position,
+                revision = state.worldRevision,
+                modifier = Modifier.fillMaxSize(),
+                onTapBlock = onTapBlock,
+                onLongPressBlock = onLongPressBlock,
+            )
+
+            VitalsOverlay(
+                state = state,
+                modifier = Modifier.align(Alignment.TopStart).padding(Space.medium),
+            )
+
+            Column(
+                modifier = Modifier.align(Alignment.TopEnd).padding(Space.medium),
+                horizontalAlignment = Alignment.End,
+            ) {
+                StratumAction(
+                    label = "Menu",
+                    onClick = onOpenMenu,
+                    emphasis = ActionEmphasis.SECONDARY,
+                )
+                Spacer(Modifier.height(Space.small))
+                ZoomControls(onZoom = onZoom)
+            }
+
+            if (state.miningTarget != null) {
+                Column(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(Space.large)
+                        .fillMaxWidth(0.6f),
+                ) {
+                    Text(
+                        text = "Mining ${world.blockAt(state.miningTarget).displayName}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.ink,
+                    )
+                    Spacer(Modifier.height(Space.tight))
+                    StratumProgressSliver(fraction = state.miningFraction)
+                }
+            }
+        }
+
+        ControlBand(
+            state = state,
+            world = world,
+            onMove = onMove,
+            onSelectSlot = onSelectSlot,
+            onStopMining = onStopMining,
+        )
+    }
+}
+
+@Composable
+private fun VitalsOverlay(
+    state: PlayUiState,
+    modifier: Modifier = Modifier,
+) {
+    val colors = StratumTheme.colors
+    // Meters sit on a panel rather than straight on the world: terrain colour
+    // changes with the biome, and text over bare terrain stops being readable
+    // the moment the player walks somewhere pale.
+    StratumPanel(
+        modifier = modifier.width(200.dp),
+        shape = Cut.small,
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(Space.small),
+    ) {
+        StratumMeter(
+            label = "Vitality",
+            value = state.player.health,
+            max = state.player.maxHealth,
+            tint = colors.danger,
+        )
+        Spacer(Modifier.height(Space.tight))
+        StratumMeter(
+            label = state.player.resourceName,
+            value = state.player.resource,
+            max = state.player.maxResource,
+            tint = colors.accentAlt,
+        )
+    }
+}
+
+@Composable
+private fun ZoomControls(onZoom: (Float) -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.End) {
+        StratumAction(label = "+", onClick = { onZoom(ZOOM_STEP) }, emphasis = ActionEmphasis.QUIET)
+        Spacer(Modifier.height(Space.tight))
+        StratumAction(label = "-", onClick = { onZoom(-ZOOM_STEP) }, emphasis = ActionEmphasis.QUIET)
+    }
+}
+
+/**
+ * Movement pad, hotbar and status. Grouped in one band so the thumb never has to
+ * leave the bottom third of the screen.
+ */
+@Composable
+private fun ControlBand(
+    state: PlayUiState,
+    world: World,
+    onMove: (Float, Float) -> Unit,
+    onSelectSlot: (Int) -> Unit,
+    onStopMining: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = StratumTheme.colors
+
+    StratumPanel(
+        modifier = modifier.fillMaxWidth(),
+        shape = Cut.large,
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(Space.large),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SectionLabel(state.biomeName.ifBlank { "Uncharted" })
+            Text(
+                text = state.message ?: "Tap to mine, hold to build",
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.inkMuted,
+            )
+        }
+
+        Spacer(Modifier.height(Space.medium))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            MovementPad(onMove = onMove, onStop = onStopMining)
+
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = "Tier ${state.player.toolTier} tools",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.inkMuted,
+                )
+                Spacer(Modifier.height(Space.small))
+                Hotbar(state = state, world = world, onSelectSlot = onSelectSlot)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MovementPad(
+    onMove: (Float, Float) -> Unit,
+    onStop: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // The pad is aligned to the isometric axes, not the screen axes: pressing
+    // "up" walks toward the top of the screen, which is north-west in world
+    // space. Anything else feels broken in an isometric game.
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        PadButton("▲") { onStop(); onMove(-STEP, -STEP) }
+        Row {
+            PadButton("◀") { onStop(); onMove(-STEP, STEP) }
+            Spacer(Modifier.width(44.dp))
+            PadButton("▶") { onStop(); onMove(STEP, -STEP) }
+        }
+        PadButton("▼") { onStop(); onMove(STEP, STEP) }
+    }
+}
+
+@Composable
+private fun PadButton(glyph: String, onClick: () -> Unit) {
+    Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+        StratumAction(label = glyph, onClick = onClick, emphasis = ActionEmphasis.SECONDARY)
+    }
+}
+
+@Composable
+private fun Hotbar(
+    state: PlayUiState,
+    world: World,
+    onSelectSlot: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (state.player.hotbar.isEmpty()) {
+        Text(
+            text = "Bag empty",
+            style = MaterialTheme.typography.labelSmall,
+            color = StratumTheme.colors.inkMuted,
+            modifier = modifier,
+        )
+        return
+    }
+
+    LazyRow(
+        modifier = modifier.width(200.dp),
+        horizontalArrangement = Arrangement.spacedBy(Space.small),
+    ) {
+        itemsIndexed(state.player.hotbar) { index, blockId ->
+            val type = world.registry.indexOrNull(blockId)?.let(world.registry::typeOf)
+            StratumChip(
+                label = "${type?.displayName ?: blockId} ${state.player.countOf(blockId)}",
+                selected = index == state.player.selectedSlot,
+                onClick = { onSelectSlot(index) },
+                swatch = type?.let { Color(it.topColor) },
+            )
+        }
+    }
+}
+
+private const val STEP = 1f
+private const val ZOOM_STEP = 0.2f

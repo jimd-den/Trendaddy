@@ -7,12 +7,18 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
+import com.stratum.app.StratumApp
+import com.stratum.content.igbo.IgboContentPack
+import com.stratum.core.designsystem.theme.StratumTheme
 import com.example.igboarpg.presentation.ArpgEngineViewModel
-import com.example.igboarpg.presentation.IgboArpgTheme
 import com.example.igboarpg.presentation.MainScaffold
 
 class MainActivity : ComponentActivity() {
-  private val viewModel: ArpgEngineViewModel by viewModels {
+
+  // The creator studio still runs on the original view model. It is reached from
+  // the new shell and will move into its own feature module as those screens are
+  // ported.
+  private val studioViewModel: ArpgEngineViewModel by viewModels {
     ArpgEngineViewModel.provideFactory(application)
   }
 
@@ -20,10 +26,15 @@ class MainActivity : ComponentActivity() {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
     setContent {
-      IgboArpgTheme {
-        MainScaffold(
-          viewModel = viewModel,
-          modifier = Modifier.fillMaxSize()
+      StratumTheme(palette = IgboContentPack.palette) {
+        StratumApp(
+          modifier = Modifier.fillMaxSize(),
+          studioContent = {
+            MainScaffold(
+              viewModel = studioViewModel,
+              modifier = Modifier.fillMaxSize(),
+            )
+          },
         )
       }
     }

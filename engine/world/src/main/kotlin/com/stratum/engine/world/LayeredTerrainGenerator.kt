@@ -63,8 +63,12 @@ class LayeredTerrainGenerator(
 
     fun surfaceHeight(worldX: Int, worldY: Int, biome: BiomeDefinition): Int {
         val sample = heightNoise.fractal(worldX * TERRAIN_SCALE, worldY * TERRAIN_SCALE, octaves = 4)
+        // Summing octaves concentrates samples around the midpoint, so the raw
+        // value only ever spends a fraction of the height budget and the world
+        // comes out looking like a plain. Stretch it back out before use.
+        val signed = (((sample - 0.5f) * 2f) * TERRAIN_GAIN).coerceIn(-1f, 1f)
         val variation = config.surfaceVariation * biome.roughness
-        val raw = config.seaLevel + biome.heightBias + ((sample - 0.5f) * 2f * variation).toInt()
+        val raw = config.seaLevel + biome.heightBias + (signed * variation).toInt()
         return raw.coerceIn(2, Chunk.HEIGHT - TOP_MARGIN)
     }
 
@@ -170,6 +174,8 @@ class LayeredTerrainGenerator(
 
     private companion object {
         const val TERRAIN_SCALE = 0.035f
+        /** Widens the noise's usable range without making cliffs unwalkable. */
+        const val TERRAIN_GAIN = 2.2f
         const val BIOME_SCALE = 0.008f
         const val CAVE_SCALE = 0.12f
         const val CAVE_SCALE_Z = 0.22f

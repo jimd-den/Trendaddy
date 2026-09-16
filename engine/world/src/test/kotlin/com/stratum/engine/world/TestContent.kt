@@ -4,6 +4,7 @@ import com.stratum.core.domain.content.BiomeDefinition
 import com.stratum.core.domain.content.ContentPack
 import com.stratum.core.domain.content.ContentPackAssembler
 import com.stratum.core.domain.content.DepositRule
+import com.stratum.core.domain.content.HeroClassDefinition
 import com.stratum.core.domain.content.ScatterRule
 import com.stratum.core.domain.world.BlockMaterial
 import com.stratum.core.domain.world.BlockType
@@ -55,12 +56,21 @@ object TestContent {
         scatter = emptyList(),
     )
 
+    val digger = HeroClassDefinition(
+        id = "test:digger",
+        name = "Digger",
+        baseHealth = 120,
+        baseResource = 40,
+        startingBlockIds = listOf(soil.id, stone.id),
+    )
+
     val pack = ContentPack(
         id = "test",
         name = "Engine Test Pack",
         author = "test",
         blocks = listOf(soil, stone, sand, torch, ore, leaves),
         biomes = listOf(plains, highlands),
+        heroClasses = listOf(digger),
     )
 
     val assembled = ContentPackAssembler().assemble(listOf(pack))

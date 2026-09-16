@@ -89,6 +89,13 @@ googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.W
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
 dependencies {
+  // The new architecture. :app stays thin: wiring and the Activity, no rules.
+  implementation(project(":core:domain"))
+  implementation(project(":core:designsystem"))
+  implementation(project(":engine:world"))
+  implementation(project(":content:igbo"))
+  implementation(project(":feature:play"))
+
   implementation(platform(libs.androidx.compose.bom))
   implementation(platform(libs.firebase.bom))
   // implementation(libs.accompanist.permissions)
@@ -132,6 +139,7 @@ dependencies {
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
+  testImplementation(project(":content:igbo"))
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
