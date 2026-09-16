@@ -11,6 +11,11 @@ import com.stratum.core.designsystem.theme.StratumTheme
 import com.stratum.core.domain.world.WorldConfig
 import com.stratum.engine.world.IsometricProjection
 import com.stratum.engine.world.WorldSession
+import com.stratum.core.domain.ai.GeneratedPackDto
+import com.stratum.core.domain.ai.toDomain
+import com.stratum.feature.forge.ForgeScreenContent
+import com.stratum.feature.forge.ForgeStatus
+import com.stratum.feature.forge.ForgeUiState
 import com.stratum.feature.play.PlayScreenContent
 import com.stratum.feature.play.PlayUiState
 import org.junit.Rule
@@ -62,5 +67,58 @@ class StratumScreenshotTest {
             }
         }
         composeTestRule.onRoot().captureRoboImage(filePath = "src/test/screenshots/play.png")
+    }
+
+    @Test
+    fun forge_screen() {
+        // Rendered with a result in hand, because the preview after generation
+        // is the part of this screen worth guarding against regressions.
+        val generated = GeneratedPackDto(
+            id = "glasswake",
+            name = "Glasswake",
+            description = "A drowned city of glass beneath a frozen sea.",
+            blocks = listOf(
+                com.stratum.core.domain.ai.GeneratedBlockDto(
+                    id = "glasswake:silt", name = "Black Silt", material = "SOIL",
+                    hardness = 0.4f, topColor = "#2b2f3a", sideColor = "#1d2029",
+                ),
+                com.stratum.core.domain.ai.GeneratedBlockDto(
+                    id = "glasswake:pane", name = "Cathedral Pane", material = "STONE",
+                    hardness = 2.0f, opaque = false, topColor = "#5f8ea8", sideColor = "#3f6274",
+                ),
+                com.stratum.core.domain.ai.GeneratedBlockDto(
+                    id = "glasswake:coldlight", name = "Coldlight Vein", material = "ORE",
+                    hardness = 4.5f, requiredTier = 2, light = 10,
+                    topColor = "#7fd4e0", sideColor = "#4a9aa6",
+                ),
+            ),
+            biomes = listOf(
+                com.stratum.core.domain.ai.GeneratedBiomeDto(
+                    id = "glasswake:nave", name = "The Flooded Nave",
+                    surfaceBlock = "glasswake:silt", subsurfaceBlock = "glasswake:silt",
+                    fillerBlock = "glasswake:pane",
+                ),
+            ),
+            heroClasses = listOf(
+                com.stratum.core.domain.ai.GeneratedClassDto(
+                    id = "glasswake:tidewright", name = "Tidewright", health = 220,
+                ),
+            ),
+        ).toDomain("glasswake")
+
+        composeTestRule.setContent {
+            StratumTheme(palette = IgboContentPack.palette, darkTheme = true) {
+                ForgeScreenContent(
+                    state = ForgeUiState(
+                        theme = "A drowned city of glass beneath a frozen sea",
+                        status = ForgeStatus.READY,
+                        result = generated,
+                        providerConfigured = true,
+                    ),
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        composeTestRule.onRoot().captureRoboImage(filePath = "src/test/screenshots/forge.png")
     }
 }

@@ -95,6 +95,8 @@ dependencies {
   implementation(project(":engine:world"))
   implementation(project(":content:igbo"))
   implementation(project(":feature:play"))
+  implementation(project(":feature:forge"))
+  implementation(project(":core:data"))
 
   implementation(platform(libs.androidx.compose.bom))
   implementation(platform(libs.firebase.bom))

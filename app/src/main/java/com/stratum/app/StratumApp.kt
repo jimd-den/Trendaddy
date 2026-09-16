@@ -15,12 +15,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.stratum.core.designsystem.component.ActionEmphasis
 import com.stratum.core.designsystem.component.SectionLabel
@@ -32,10 +34,14 @@ import com.stratum.core.designsystem.component.StratumWell
 import com.stratum.core.designsystem.theme.Space
 import com.stratum.core.designsystem.theme.StratumTheme
 import com.stratum.feature.play.PlayScreen
+import com.stratum.core.domain.content.ContentPack
+import com.stratum.feature.forge.ForgeScreen
+import com.stratum.feature.forge.ForgeViewModel
+import com.stratum.feature.play.PlayScreen as PlayScreenRoute
 import com.stratum.feature.play.PlayViewModel
 
 /** Top-level destinations. Deliberately few: the game is the app, not a tab in it. */
-private enum class Destination { HOME, PLAY, STUDIO }
+private enum class Destination { HOME, PLAY, FORGE, SETTINGS, STUDIO }
 
 /**
  * The app shell.
@@ -50,30 +56,74 @@ fun StratumApp(
     studioContent: @Composable (onBack: () -> Unit) -> Unit = {},
 ) {
     var destination by remember { mutableStateOf(Destination.HOME) }
-    val content = remember { GameSetup.assemble() }
-    val config = remember { GameSetup.worldConfig() }
+
+    // Packs the player has forged this session. Adding one rebuilds the
+    // assembled content, so the next world is made of the new material.
+    var forgedPacks by remember { mutableStateOf(emptyList<ContentPack>()) }
+    val content = remember(forgedPacks) { GameSetup.assemble(forgedPacks) }
+
+    // A new seed per run, but stable across recomposition so walking around does
+    // not regenerate the world under the player.
+    var seed by remember { mutableStateOf(System.currentTimeMillis()) }
+    val config = remember(seed) { GameSetup.worldConfig(seed) }
+
+    val context = LocalContext.current
+    val ai = remember(context) { AiWiring(context) }
 
     when (destination) {
         Destination.HOME -> HomeScreen(
-            packName = content.packs.last().name,
+            packName = content.packs.joinToString(" + ") { it.name },
             blockCount = content.registry.size,
             biomeCount = content.biomes.size,
             classCount = content.heroClasses.size,
-            onDescend = { destination = Destination.PLAY },
+            onDescend = {
+                seed = System.currentTimeMillis()
+                destination = Destination.PLAY
+            },
+            onForge = { destination = Destination.FORGE },
+            onSettings = { destination = Destination.SETTINGS },
             onStudio = { destination = Destination.STUDIO },
             modifier = modifier,
         )
 
         Destination.PLAY -> {
-            val viewModel: PlayViewModel = viewModel(
-                factory = PlayViewModel.factory(content, config),
+            // Keyed so forging a pack or starting a new run builds a fresh
+            // session rather than reusing the previous world.
+            key(content, config) {
+                val viewModel: PlayViewModel = viewModel(
+                    factory = PlayViewModel.factory(content, config),
+                )
+                PlayScreenRoute(
+                    viewModel = viewModel,
+                    modifier = modifier,
+                    onOpenMenu = { destination = Destination.HOME },
+                )
+            }
+        }
+
+        Destination.FORGE -> {
+            val forgeViewModel: ForgeViewModel = viewModel(
+                factory = ForgeViewModel.factory(
+                    generatePack = ai.generateContentPack,
+                    generateLore = ai.generateLore,
+                    isProviderConfigured = ai::isConfigured,
+                    onPackAccepted = { pack -> forgedPacks = forgedPacks + pack },
+                ),
             )
-            PlayScreen(
-                viewModel = viewModel,
+            ForgeScreen(
+                viewModel = forgeViewModel,
                 modifier = modifier,
-                onOpenMenu = { destination = Destination.HOME },
+                onBack = { destination = Destination.HOME },
+                onOpenSettings = { destination = Destination.SETTINGS },
             )
         }
+
+        Destination.SETTINGS -> ProviderSettingsScreen(
+            initial = ai.settings.load(),
+            onSave = ai.settings::save,
+            onBack = { destination = Destination.HOME },
+            modifier = modifier,
+        )
 
         Destination.STUDIO -> studioContent { destination = Destination.HOME }
     }
@@ -90,6 +140,8 @@ private fun HomeScreen(
     biomeCount: Int,
     classCount: Int,
     onDescend: () -> Unit,
+    onForge: () -> Unit,
+    onSettings: () -> Unit,
     onStudio: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -155,9 +207,23 @@ private fun HomeScreen(
             )
             Spacer(Modifier.height(Space.small))
             StratumAction(
+                label = "Forge a pack with AI",
+                onClick = onForge,
+                emphasis = ActionEmphasis.SECONDARY,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(Space.small))
+            StratumAction(
                 label = "Creator studio",
                 onClick = onStudio,
                 emphasis = ActionEmphasis.SECONDARY,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(Space.small))
+            StratumAction(
+                label = "Model provider",
+                onClick = onSettings,
+                emphasis = ActionEmphasis.QUIET,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
