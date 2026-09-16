@@ -1,4 +1,5 @@
 pluginManagement {
+  includeBuild("build-logic")
   repositories {
     google {
       content {
@@ -22,6 +23,18 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Igbo ARPG Engine"
+rootProject.name = "Stratum"
 
+// ---------------------------------------------------------------------------
+// Dependency rule: :app -> :feature:* -> :core:designsystem -> :core:domain
+//                                     -> :core:data      -> :core:domain
+//                                        :engine:world   -> :core:domain
+// Nothing ever points back inward. :core:domain and :engine:world are pure
+// Kotlin and cannot reach Android at all.
+// ---------------------------------------------------------------------------
 include(":app")
+include(":core:domain")
+include(":core:data")
+include(":core:designsystem")
+include(":engine:world")
+include(":feature:play")
