@@ -29,4 +29,9 @@ build/
 local.properties
 .env
 debug.keystore
+
+# Keystores are secrets, with one deliberate exception: the CI test key below
+# is committed so every pull request produces an installable APK. Its password
+# is published in app/build.gradle.kts. It must never be used to publish.
 *.jks
+!/ci-signing.jks

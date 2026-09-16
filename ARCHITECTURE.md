@@ -107,8 +107,11 @@ configuration: `stratum.jvm`, `stratum.android.library` and
 ```sh
 ./gradlew test                  # every module's unit tests
 ./gradlew architectureCheck     # boundary enforcement
-./gradlew :app:assembleRelease  # the APK CI attaches to each pull request
+./gradlew :app:assembleRelease  # the signed APK CI attaches to each pull request
 ```
+
+Release builds are always signed; see `SIGNING.md` for which key and how to
+switch to a real upload key.
 
 Screenshot tests render the shell, the play screen and the forge. Re-record them
 after an intentional visual change:

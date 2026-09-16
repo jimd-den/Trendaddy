@@ -1,5 +1,14 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
 
+/**
+ * The fallback signing key. Its password is deliberately public: the key's only
+ * job is to make continuous integration artifacts installable, and treating it
+ * as a secret would imply it protects something.
+ */
+val CI_KEYSTORE_NAME = "ci-signing.jks"
+val CI_KEYSTORE_ALIAS = "stratum-ci"
+val CI_KEYSTORE_PASSWORD = "stratum-ci"
+
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
@@ -22,30 +31,44 @@ android {
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
-  // Signing is opt-in. CI builds a release APK on every pull request, and a
-  // fork or a fresh clone has no keystore, so a missing one produces an
-  // unsigned APK instead of failing the build.
-  val releaseKeystore = (System.getenv("KEYSTORE_PATH")?.let(::file)
-    ?: rootProject.file("my-upload-key.jks"))
-    .takeIf { it.isFile }
-  val localDebugKeystore = rootProject.file("debug.keystore").takeIf { it.isFile }
+  // A release build is always signed, because an unsigned APK cannot be
+  // installed at all and is therefore not a deliverable.
+  //
+  // Two keys, in order of preference:
+  //  1. A real upload key, handed in by CI through KEYSTORE_PATH and the
+  //     matching password environment variables.
+  //  2. ci-signing.jks, committed to this repo with a published password.
+  //     It exists so every pull request produces an installable artifact, and
+  //     because the key is stable, build N+1 upgrades build N in place instead
+  //     of forcing an uninstall. It is the same bargain as Android's shared
+  //     debug.keystore and carries the same warning: never publish with it.
+  val uploadKeystore = System.getenv("KEYSTORE_PATH")?.let(::file)?.takeIf { it.isFile }
+  val ciKeystore = rootProject.file(CI_KEYSTORE_NAME).takeIf { it.isFile }
 
   signingConfigs {
-    if (releaseKeystore != null) {
-      create("release") {
-        storeFile = releaseKeystore
+    create("release") {
+      if (uploadKeystore != null) {
+        storeFile = uploadKeystore
         storePassword = System.getenv("STORE_PASSWORD")
         keyAlias = System.getenv("KEY_ALIAS") ?: "upload"
         keyPassword = System.getenv("KEY_PASSWORD")
+      } else {
+        requireNotNull(ciKeystore) {
+          "No signing key available: set KEYSTORE_PATH to an upload keystore, " +
+            "or restore $CI_KEYSTORE_NAME in the repository root."
+        }
+        storeFile = ciKeystore
+        storePassword = CI_KEYSTORE_PASSWORD
+        keyAlias = CI_KEYSTORE_ALIAS
+        keyPassword = CI_KEYSTORE_PASSWORD
       }
-    }
-    if (localDebugKeystore != null) {
-      create("debugConfig") {
-        storeFile = localDebugKeystore
-        storePassword = "android"
-        keyAlias = "androiddebugkey"
-        keyPassword = "android"
-      }
+
+      // Stated rather than inherited from minSdk. v2 is what every supported
+      // device verifies; v3 is what allows the signing key to be rotated later
+      // without existing installs refusing the update.
+      enableV1Signing = false
+      enableV2Signing = true
+      enableV3Signing = true
     }
   }
 
@@ -54,10 +77,11 @@ android {
       isCrunchPngs = false
       isMinifyEnabled = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      signingConfig = signingConfigs.findByName("release")
+      signingConfig = signingConfigs.getByName("release")
     }
     debug {
-      signingConfig = signingConfigs.findByName("debugConfig") ?: signingConfigs.getByName("debug")
+      // The SDK's own debug key, so a debug build never depends on repo state.
+      signingConfig = signingConfigs.getByName("debug")
     }
   }
   compileOptions {
@@ -153,8 +177,28 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
 }
 
+/**
+ * Prints which key signed the build. Without this the only way to tell an
+ * upload-signed artifact from a CI-signed one is to unzip it and read the
+ * certificate, which nobody does before handing a build to a tester.
+ */
+tasks.register("reportSigningKey") {
+  group = "verification"
+  description = "Says which key release builds will be signed with."
+  // Resolved to plain strings at configuration time. Reading the script's own
+  // properties inside the action would capture the script object itself, which
+  // the configuration cache cannot serialize.
+  val summary = if (System.getenv("KEYSTORE_PATH")?.let(::file)?.isFile == true) {
+    "Release signing: upload key from KEYSTORE_PATH."
+  } else {
+    "Release signing: $CI_KEYSTORE_NAME (test key, not for publication)."
+  }
+  doLast { logger.lifecycle(summary) }
+}
+
 val apkOutputDir = layout.projectDirectory.dir("../apk")
 val debugApkDir = layout.buildDirectory.dir("outputs/apk/debug")
+val releaseApkDir = layout.buildDirectory.dir("outputs/apk/release")
 
 val copyApkToRoot = tasks.register<Copy>("copyApkToRoot") {
   from(debugApkDir)
@@ -169,8 +213,24 @@ val copyNamedApkToRoot = tasks.register<Copy>("copyNamedApkToRoot") {
   rename("app-debug.apk", "ofo-and-bronze-engine.apk")
 }
 
+/**
+ * Keeps a signed, installable build where this project has always kept one.
+ * The debug copies above predate release signing; this is the one to hand to
+ * someone who just wants to run the game.
+ */
+val copyReleaseApkToRoot = tasks.register<Copy>("copyReleaseApkToRoot") {
+  from(releaseApkDir)
+  into(apkOutputDir)
+  include("app-release.apk")
+  rename("app-release.apk", "stratum-release.apk")
+}
+
 tasks.matching { it.name == "assembleDebug" }.configureEach {
   finalizedBy(copyApkToRoot, copyNamedApkToRoot)
+}
+
+tasks.matching { it.name == "assembleRelease" }.configureEach {
+  finalizedBy(copyReleaseApkToRoot)
 }
 
 
