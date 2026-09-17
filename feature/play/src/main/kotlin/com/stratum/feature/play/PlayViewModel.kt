@@ -15,6 +15,7 @@ import com.stratum.engine.world.IsometricProjection
 import com.stratum.engine.world.AttackReport
 import com.stratum.engine.world.CombatEvent
 import com.stratum.engine.world.DodgeResult
+import com.stratum.core.domain.sprite.AnimationPlayback
 import com.stratum.engine.world.FeedbackMark
 import com.stratum.engine.world.GroundLoot
 import com.stratum.engine.world.MineResult
@@ -39,6 +40,12 @@ class PlayViewModel(
     content: AssembledContent,
     config: WorldConfig,
     heroClassId: String? = null,
+    /**
+     * Resolves an actor to drawable art. Supplied by the composition root,
+     * because decoding a bitmap is a platform concern and this view model is
+     * otherwise free of one.
+     */
+    private val spriteResolver: (SpriteKey) -> DrawableSprite? = { null },
 ) : ViewModel() {
 
     private val session = WorldSession(content, config, heroClassId)
@@ -220,6 +227,9 @@ class PlayViewModel(
             feedback = snapshot.feedback,
             playerFlash = snapshot.playerFlash,
             flashFor = session::flashFor,
+            playerAnimation = snapshot.playerAnimation,
+            animationFor = session::animationFor,
+            spriteFor = spriteResolver,
             skills = snapshot.skills,
             frame = _state.value.frame + 1,
             message = message ?: _state.value.message,
@@ -263,10 +273,11 @@ class PlayViewModel(
             content: AssembledContent,
             config: WorldConfig,
             heroClassId: String? = null,
+            spriteResolver: (SpriteKey) -> DrawableSprite? = { null },
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                PlayViewModel(content, config, heroClassId) as T
+                PlayViewModel(content, config, heroClassId, spriteResolver) as T
         }
     }
 }
@@ -290,6 +301,9 @@ data class PlayUiState(
     val playerFlash: Float = 0f,
     /** Per-actor hit flash, read by the renderer for each visible monster. */
     val flashFor: (String) -> Float = { 0f },
+    val playerAnimation: AnimationPlayback = AnimationPlayback(),
+    val animationFor: (String) -> AnimationPlayback = { AnimationPlayback() },
+    val spriteFor: (SpriteKey) -> DrawableSprite? = { null },
     val skills: List<SkillDefinition> = emptyList(),
     /** Advances every tick so the canvas redraws while the fight is moving. */
     val frame: Int = 0,

@@ -285,3 +285,152 @@ class MovementTest {
         assertTrue(snapshot.rollCooldownFraction > 0f)
     }
 }
+
+class AnimationStateTest {
+
+    private fun session() = WorldSession(
+        content = TestContent.assembled,
+        config = WorldConfig(seed = 8L, simulationRadius = 1),
+    ).also { it.enemies = emptyList() }
+
+    private fun WorldSession.flatten(radius: Int = 6) {
+        val feet = player.blockPos
+        val w = world as MutableWorld
+        for (dy in -radius..radius) {
+            for (dx in -radius..radius) {
+                w.setBlock(
+                    BlockPos(feet.x + dx, feet.y + dy, feet.z - 1),
+                    TestContent.registry.indexOf(TestContent.stone.id),
+                )
+                for (dz in 0..3) w.setBlock(BlockPos(feet.x + dx, feet.y + dy, feet.z + dz), BlockRegistry.AIR_INDEX)
+            }
+        }
+    }
+
+    @Test
+    fun `standing still is idle and walking is walk`() {
+        val session = session()
+        session.flatten()
+        session.tick(0.05f)
+        assertEquals(
+            com.stratum.core.domain.sprite.AnimationState.IDLE,
+            session.animationFor(WorldSession.PLAYER_ACTOR_ID).state,
+        )
+
+        session.setMoveInput(1f, 0f)
+        session.tick(0.05f)
+        assertEquals(
+            com.stratum.core.domain.sprite.AnimationState.WALK,
+            session.animationFor(WorldSession.PLAYER_ACTOR_ID).state,
+        )
+    }
+
+    @Test
+    fun `rolling overrides walking`() {
+        val session = session()
+        session.flatten(radius = 12)
+        session.setMoveInput(1f, 0f)
+        session.dodge()
+        session.tick(0.05f)
+        assertEquals(
+            com.stratum.core.domain.sprite.AnimationState.ROLL,
+            session.animationFor(WorldSession.PLAYER_ACTOR_ID).state,
+        )
+    }
+
+    @Test
+    fun `attacking holds the attack state for a beat rather than one frame`() {
+        val session = session()
+        session.flatten()
+        // Deliberately no enemy: one standing in melee range would hit back, and
+        // the flinch correctly overrides the attack animation. The swing sets
+        // the hold whether or not it connects, which is what this measures.
+
+        session.attack()
+        session.tick(0.05f)
+        assertEquals(
+            com.stratum.core.domain.sprite.AnimationState.ATTACK,
+            session.animationFor(WorldSession.PLAYER_ACTOR_ID).state,
+        )
+
+        // Still swinging a moment later.
+        session.tick(0.1f)
+        assertEquals(
+            com.stratum.core.domain.sprite.AnimationState.ATTACK,
+            session.animationFor(WorldSession.PLAYER_ACTOR_ID).state,
+        )
+
+        // And released eventually.
+        repeat(10) { session.tick(0.1f) }
+        assertTrue(
+            session.animationFor(WorldSession.PLAYER_ACTOR_ID).state !=
+                com.stratum.core.domain.sprite.AnimationState.ATTACK,
+            "the attack animation never ended",
+        )
+    }
+
+    @Test
+    fun `a looping animation keeps its clock across frames`() {
+        val session = session()
+        session.flatten()
+        session.setMoveInput(1f, 0f)
+        session.tick(0.1f)
+        val first = session.animationFor(WorldSession.PLAYER_ACTOR_ID).elapsedMs
+        session.tick(0.1f)
+        val second = session.animationFor(WorldSession.PLAYER_ACTOR_ID).elapsedMs
+        assertTrue(second > first, "the walk cycle restarted every frame")
+    }
+
+    @Test
+    fun `a dead player animates as dead`() {
+        val session = session()
+        session.flatten()
+        session.player = session.player.damaged(session.player.health)
+        session.tick(0.05f)
+        // A dead session stops ticking, so drive the selector directly.
+        assertEquals(
+            com.stratum.core.domain.sprite.AnimationState.DIE,
+            com.stratum.core.domain.sprite.AnimationSelector.select(isDead = true),
+        )
+    }
+
+    @Test
+    fun `animation clocks are forgotten when an actor stops existing`() {
+        val session = session()
+        session.flatten()
+        val enemy = session.spawn(TestContent.rat, session.player.position.translated(1f, 0f, 0f))
+        session.tick(0.05f)
+
+        // Ranks are rolled, so a spawn can be an elite with several times the
+        // health. Keep swinging until it is actually gone.
+        var guard = 0
+        while (session.enemies.any { it.instanceId == enemy.instanceId } && guard < 60) {
+            session.attack()
+            session.tick(0.3f)
+            guard++
+        }
+        assertTrue(
+            session.enemies.none { it.instanceId == enemy.instanceId },
+            "could not kill the spawn in $guard rounds",
+        )
+
+        session.tick(0.05f)
+        assertEquals(
+            0L,
+            session.animationFor(enemy.instanceId).elapsedMs,
+            "a dead actor's animation clock lingered for the rest of the run",
+        )
+    }
+
+    @Test
+    fun `the snapshot carries the player's animation`() {
+        val session = session()
+        session.flatten()
+        session.setMoveInput(0f, 1f)
+        session.tick(0.05f)
+        assertEquals(
+            com.stratum.core.domain.sprite.AnimationState.WALK,
+            session.snapshot().playerAnimation.state,
+        )
+    }
+}

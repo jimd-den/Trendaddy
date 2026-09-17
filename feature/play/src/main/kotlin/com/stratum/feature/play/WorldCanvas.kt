@@ -12,7 +12,14 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import com.stratum.core.domain.actor.EnemyInstance
+import com.stratum.core.domain.sprite.AnimationPlayback
+import com.stratum.core.domain.sprite.SpriteFacing
+import com.stratum.core.domain.sprite.SpriteSheet
 import com.stratum.core.domain.world.BlockPos
 import com.stratum.core.domain.world.Direction
 import com.stratum.core.domain.world.Chunk
@@ -47,6 +54,14 @@ fun WorldCanvas(
     isRolling: Boolean = false,
     isInvulnerable: Boolean = false,
     flashFor: (String) -> Float = { 0f },
+    /**
+     * Supplies the drawn sheet for an actor, or null to fall back to shapes.
+     * Every actor without art still renders, which is what lets sprites arrive
+     * one generation at a time rather than all or nothing.
+     */
+    spriteFor: (SpriteKey) -> DrawableSprite? = { null },
+    playerAnimation: AnimationPlayback = AnimationPlayback(),
+    animationFor: (String) -> AnimationPlayback = { AnimationPlayback() },
     /** Redrawn whenever this changes; the world itself is mutable and not a Compose state. */
     revision: Int,
     /** Changes every frame while a fight is running, to force a redraw. */
@@ -122,11 +137,44 @@ fun WorldCanvas(
             val y = originY + screen.y
             when (actor) {
                 is Actor.Loot -> drawLoot(x, y, projection, Color(actor.loot.item.rarity.beamColor()))
-                is Actor.Monster -> drawEnemy(x, y, projection, actor.enemy, flashFor(actor.enemy.instanceId))
-                is Actor.Player -> drawPlayer(
-                    x, y, projection, playerFacing, playerAccent,
-                    hurt = playerFlash, rolling = isRolling, invulnerable = isInvulnerable,
-                )
+                is Actor.Monster -> {
+                    val sprite = spriteFor(SpriteKey.Monster(actor.enemy.definitionId))
+                    if (sprite != null) {
+                        drawSprite(
+                            x, y, projection, sprite,
+                            animationFor(actor.enemy.instanceId),
+                            SpriteFacing.of(0, 1),
+                            flashFor(actor.enemy.instanceId),
+                        )
+                        drawEnemyOverlay(x, y, projection, actor.enemy)
+                    } else {
+                        drawEnemy(x, y, projection, actor.enemy, flashFor(actor.enemy.instanceId))
+                    }
+                }
+                is Actor.Player -> {
+                    val sprite = spriteFor(SpriteKey.Player)
+                    if (sprite != null) {
+                        drawSprite(
+                            x, y, projection, sprite, playerAnimation,
+                            SpriteFacing.of(playerFacing.dx, playerFacing.dy),
+                            playerFlash,
+                        )
+                        if (isInvulnerable) {
+                            val r = projection.tileWidth * projection.zoom * 0.22f
+                            drawCircle(
+                                INVULNERABLE_RING,
+                                r * 1.9f,
+                                Offset(x, y - projection.blockHeight * projection.zoom * 0.5f),
+                                style = Stroke(3f),
+                            )
+                        }
+                    } else {
+                        drawPlayer(
+                            x, y, projection, playerFacing, playerAccent,
+                            hurt = playerFlash, rolling = isRolling, invulnerable = isInvulnerable,
+                        )
+                    }
+                }
             }
         }
 
@@ -150,6 +198,81 @@ private sealed interface Actor {
     data class Loot(val loot: GroundLoot) : Actor {
         override val position: WorldPoint get() = loot.position
     }
+}
+
+/**
+ * Draws one frame of a sprite sheet, sized to the world grid.
+ *
+ * Frames are cut with nearest-neighbour filtering: sprite art is pixel art, and
+ * smoothing it on scale-up is the difference between crisp and mushy.
+ */
+private fun DrawScope.drawSprite(
+    x: Float,
+    y: Float,
+    projection: IsometricProjection,
+    sprite: DrawableSprite,
+    playback: AnimationPlayback,
+    facing: SpriteFacing,
+    flash: Float,
+) {
+    val sheet = sprite.sheet
+    val frame = sheet.frameFor(playback.frameIn(sheet), facing)
+    val rect = sheet.frameRect(frame)
+
+    // Drawn a little larger than a block so a character reads against terrain,
+    // and anchored at the feet rather than the centre so a tall sprite grows
+    // upward instead of sinking into the ground.
+    val drawWidth = projection.tileWidth * projection.zoom * SPRITE_SCALE
+    val drawHeight = drawWidth * (rect.height.toFloat() / rect.width.coerceAtLeast(1))
+    val left = (x - drawWidth / 2f).toInt()
+    val top = (y - drawHeight + projection.tileHeight * projection.zoom * 0.25f).toInt()
+
+    drawImage(
+        image = sprite.image,
+        srcOffset = IntOffset(rect.left, rect.top),
+        srcSize = IntSize(rect.width, rect.height),
+        dstOffset = IntOffset(left, top),
+        dstSize = IntSize(drawWidth.toInt(), drawHeight.toInt()),
+        filterQuality = FilterQuality.None,
+        alpha = 1f,
+    )
+
+    if (flash > 0f) {
+        drawImage(
+            image = sprite.image,
+            srcOffset = IntOffset(rect.left, rect.top),
+            srcSize = IntSize(rect.width, rect.height),
+            dstOffset = IntOffset(left, top),
+            dstSize = IntSize(drawWidth.toInt(), drawHeight.toInt()),
+            filterQuality = FilterQuality.None,
+            alpha = flash * 0.75f,
+            colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White),
+        )
+    }
+}
+
+/** Health bar and rank ring, drawn over a sprite that has no such affordances. */
+private fun DrawScope.drawEnemyOverlay(
+    x: Float,
+    y: Float,
+    projection: IsometricProjection,
+    enemy: EnemyInstance,
+) {
+    if (enemy.healthFraction >= 1f) return
+    val scale = projection.tileWidth * projection.zoom
+    val barWidth = scale * 0.42f
+    val barTop = y - scale * 0.95f
+
+    drawRect(
+        color = Color.Black.copy(alpha = 0.6f),
+        topLeft = Offset(x - barWidth / 2f, barTop),
+        size = Size(barWidth, HEALTH_BAR_HEIGHT),
+    )
+    drawRect(
+        color = ENEMY_HEALTH,
+        topLeft = Offset(x - barWidth / 2f, barTop),
+        size = Size(barWidth * enemy.healthFraction, HEALTH_BAR_HEIGHT),
+    )
 }
 
 /**
@@ -484,8 +607,18 @@ private const val RISE_FRACTION = 0.85f
 private const val BASE_TEXT_FRACTION = 0.26f
 private const val SPREAD_BUCKETS = 5
 private const val SPREAD_FRACTION = 0.16f
+private const val SPRITE_SCALE = 1.35f
 private val INVULNERABLE_RING = Color(0xFF7FD4E0)
 internal val PLAYER_BODY = Color(0xFFF4EBDC)
 internal val PLAYER_EDGE = Color(0xFF14110E)
 internal val PLAYER_RING = Color(0xFFCD7F32)
 private const val FACING_REACH = 1f
+
+/** Identifies which actor a sprite is wanted for. */
+sealed interface SpriteKey {
+    data object Player : SpriteKey
+    data class Monster(val definitionId: String) : SpriteKey
+}
+
+/** A sheet paired with its decoded pixels, ready to draw. */
+data class DrawableSprite(val sheet: SpriteSheet, val image: ImageBitmap)

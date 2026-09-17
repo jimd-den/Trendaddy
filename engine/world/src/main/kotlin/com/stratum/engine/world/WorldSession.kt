@@ -9,6 +9,9 @@ import com.stratum.core.domain.content.BiomeDefinition
 import com.stratum.core.domain.item.ItemInstance
 import com.stratum.core.domain.item.ItemRarity
 import com.stratum.core.domain.session.PlayerState
+import com.stratum.core.domain.sprite.AnimationPlayback
+import com.stratum.core.domain.sprite.AnimationSelector
+import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.world.BlockPos
 import com.stratum.core.domain.world.Chunk
 import com.stratum.core.domain.world.Direction
@@ -49,6 +52,19 @@ class WorldSession(
 
     /** Short-lived visuals: damage numbers, misses, level-ups. */
     val feedback: List<FeedbackMark> get() = feedbackLog.active
+
+    /**
+     * Animation clocks, per actor id. Kept here rather than in the renderer so
+     * two monsters in the same state stay independent and a recomposition does
+     * not restart every walk cycle.
+     */
+    private val playbacks = HashMap<String, AnimationPlayback>()
+
+    /** Seconds left of an actor's attack animation, so a swing is not instant. */
+    private val attackHolds = HashMap<String, Float>()
+
+    fun animationFor(actorId: String): AnimationPlayback =
+        playbacks[actorId] ?: AnimationPlayback()
 
     /** How lit an actor is from a recent hit, 0..1. */
     fun flashFor(actorId: String): Float = hitFlashes.intensity(actorId)
@@ -401,6 +417,7 @@ class WorldSession(
 
         feedbackLog.advance(deltaSeconds)
         hitFlashes.advance(deltaSeconds)
+        advanceAttackHolds(deltaSeconds)
 
         // Movement first: a roll should be able to carry the player out of
         // reach before the monsters around them take their swing.
@@ -422,6 +439,9 @@ class WorldSession(
                 cooldownFor = { it.stats.secondsBetweenAttacks },
                 random = random,
             )
+            // Whoever swung is mid-attack for a beat, so the animation reads.
+            incoming.enemies.filter { it.attackCooldown > 0f && it.isAlive }
+                .forEach { attackHolds[it.instanceId] = ATTACK_ANIMATION_HOLD }
             enemies = incoming.enemies
             if (incoming.totalDamage > 0) {
                 if (isInvulnerable) {
@@ -462,6 +482,7 @@ class WorldSession(
         }
 
         produced += collectLoot()
+        advanceAnimations(deltaSeconds)
 
         player = player.copy(
             cooldowns = player.cooldowns.advanced(deltaSeconds),
@@ -485,6 +506,7 @@ class WorldSession(
             random = random,
         )
         player = player.copy(attackCooldown = stats.secondsBetweenAttacks)
+        attackHolds[PLAYER_ACTOR_ID] = ATTACK_ANIMATION_HOLD
         return applyOutcome(outcome)
     }
 
@@ -509,6 +531,7 @@ class WorldSession(
             resource = (player.resource - skill.resourceCost).coerceAtLeast(0),
             cooldowns = player.cooldowns.started(skill),
         )
+        attackHolds[PLAYER_ACTOR_ID] = ATTACK_ANIMATION_HOLD
         return applyOutcome(outcome, skill)
     }
 
@@ -673,6 +696,55 @@ class WorldSession(
         return player.isAlive
     }
 
+    private fun advanceAttackHolds(deltaSeconds: Float) {
+        val iterator = attackHolds.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            val remaining = entry.value - deltaSeconds
+            if (remaining <= 0f) iterator.remove() else entry.setValue(remaining)
+        }
+    }
+
+    /**
+     * Picks each actor's animation state from what it is actually doing, and
+     * advances its clock.
+     *
+     * Derived every frame rather than stored, so state can never drift out of
+     * step with the simulation that produced it.
+     */
+    private fun advanceAnimations(deltaSeconds: Float) {
+        val deltaMs = (deltaSeconds * 1000f).toLong()
+
+        val playerState = AnimationSelector.select(
+            isDead = !player.isAlive,
+            isRolling = isRolling,
+            wasHitRecently = hitFlashes.intensity(PLAYER_ACTOR_ID) > 0f,
+            isAttacking = attackHolds.containsKey(PLAYER_ACTOR_ID),
+            isMoving = moveInput != WorldPoint.ZERO,
+        )
+        playbacks[PLAYER_ACTOR_ID] = animate(PLAYER_ACTOR_ID, playerState, deltaMs)
+
+        enemies.forEach { enemy ->
+            val state = AnimationSelector.select(
+                isDead = !enemy.isAlive,
+                wasHitRecently = hitFlashes.intensity(enemy.instanceId) > 0f,
+                isAttacking = attackHolds.containsKey(enemy.instanceId),
+                isMoving = enemy.state == com.stratum.core.domain.actor.EnemyState.CHASING ||
+                    enemy.state == com.stratum.core.domain.actor.EnemyState.FLEEING,
+            )
+            playbacks[enemy.instanceId] = animate(enemy.instanceId, state, deltaMs)
+        }
+
+        // Forget actors that no longer exist, or the map grows for the whole run.
+        val living = enemies.map { it.instanceId }.toSet() + PLAYER_ACTOR_ID
+        playbacks.keys.retainAll(living)
+    }
+
+    private fun animate(actorId: String, state: AnimationState, deltaMs: Long): AnimationPlayback =
+        (playbacks[actorId] ?: AnimationPlayback())
+            .transitionTo(state)
+            .advanced(deltaMs)
+
     /** Skills the class has, resolved against the loaded packs. */
     val skills: List<SkillDefinition> get() = player.skillIds.mapNotNull(content::skill)
 
@@ -696,6 +768,7 @@ class WorldSession(
         rollCooldownFraction = rollCooldownFraction,
         feedback = feedback,
         playerFlash = hitFlashes.intensity(PLAYER_ACTOR_ID),
+        playerAnimation = animationFor(PLAYER_ACTOR_ID),
         worldRevision = streamingWorld.loadedChunks.sumOf { it.revision },
         enemies = enemies,
         groundLoot = groundLoot,
@@ -725,6 +798,8 @@ class WorldSession(
         const val INPUT_DEADZONE = 0.12f
 
         const val PLAYER_ACTOR_ID = "player"
+        /** How long an actor is considered mid-swing, for animation only. */
+        const val ATTACK_ANIMATION_HOLD = 0.3f
         private const val FEEDBACK_HURT = 0xFFD2544BL
         private const val FEEDBACK_DODGE = 0xFF7FD4E0L
         private const val FEEDBACK_BLOCKED = 0xFF9A96A8L
@@ -754,6 +829,7 @@ data class SessionSnapshot(
     val rollCooldownFraction: Float = 0f,
     val feedback: List<FeedbackMark> = emptyList(),
     val playerFlash: Float = 0f,
+    val playerAnimation: AnimationPlayback = AnimationPlayback(),
     /** Changes when any loaded chunk changes, so the renderer knows to redraw. */
     val worldRevision: Int,
     val enemies: List<EnemyInstance> = emptyList(),

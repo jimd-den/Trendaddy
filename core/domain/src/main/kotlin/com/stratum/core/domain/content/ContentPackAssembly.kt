@@ -7,6 +7,7 @@ import com.stratum.core.domain.item.AffixDefinition
 import com.stratum.core.domain.item.ItemRarity
 import com.stratum.core.domain.item.RarityStyle
 import com.stratum.core.domain.item.WeaponBase
+import com.stratum.core.domain.sprite.SpriteSheet
 import com.stratum.core.domain.world.BlockRegistry
 import kotlinx.coroutines.flow.Flow
 
@@ -33,6 +34,7 @@ class ContentPackAssembler {
         val enemies = LinkedHashMap<String, EnemyDefinition>()
         val skills = LinkedHashMap<String, SkillDefinition>()
         val rarityStyles = LinkedHashMap<ItemRarity, RarityStyle>()
+        val spriteSheets = LinkedHashMap<String, SpriteSheet>()
         val overrides = mutableListOf<PackOverride>()
 
         packs.forEach { pack ->
@@ -57,6 +59,7 @@ class ContentPackAssembler {
             pack.weapons.forEach { weapon -> weapons[weapon.id] = weapon }
             pack.skills.forEach { skill -> skills[skill.id] = skill }
             pack.rarityStyles.forEach { style -> rarityStyles[style.rarity] = style }
+            pack.spriteSheets.forEach { sheet -> spriteSheets[sheet.id] = sheet }
             pack.enemies.forEach { enemy ->
                 enemies.put(enemy.id, enemy)?.let {
                     overrides += PackOverride(pack.id, enemy.id, OverrideKind.ENEMY)
@@ -82,6 +85,7 @@ class ContentPackAssembler {
             enemies = enemies.values.toList(),
             skills = skills.values.toList(),
             rarityStyles = rarityStyles,
+            spriteSheets = spriteSheets.values.toList(),
             overrides = overrides,
         )
     }
@@ -150,6 +154,7 @@ data class AssembledContent(
     val enemies: List<EnemyDefinition> = emptyList(),
     val skills: List<SkillDefinition> = emptyList(),
     val rarityStyles: Map<ItemRarity, RarityStyle> = emptyMap(),
+    val spriteSheets: List<SpriteSheet> = emptyList(),
     /** Reported to the player so a pack silently reskinning another is visible. */
     val overrides: List<PackOverride> = emptyList(),
 ) {
@@ -168,6 +173,24 @@ data class AssembledContent(
     fun skill(id: String): SkillDefinition? = skills.firstOrNull { it.id == id }
 
     fun weapon(id: String): WeaponBase? = weapons.firstOrNull { it.id == id }
+
+    fun spriteSheet(id: String?): SpriteSheet? =
+        id?.let { wanted -> spriteSheets.firstOrNull { it.id == wanted } }
+
+    /**
+     * The sheet an actor should be drawn with, or null to fall back to the
+     * shape renderer. Looked up by the definition's own sprite set id.
+     */
+    fun sheetForEnemy(definitionId: String): SpriteSheet? =
+        spriteSheet(enemies.firstOrNull { it.id == definitionId }?.spriteSetId)
+
+    fun sheetForHero(heroClassId: String): SpriteSheet? =
+        spriteSheet(heroClasses.firstOrNull { it.id == heroClassId }?.spriteSetId)
+
+    /** A copy with extra sheets layered on, for sheets generated this session. */
+    fun withSpriteSheets(extra: List<SpriteSheet>): AssembledContent =
+        if (extra.isEmpty()) this
+        else copy(spriteSheets = (spriteSheets + extra).distinctBy { it.id })
 
     fun rarityName(rarity: ItemRarity): String = rarityStyles[rarity]?.name ?: rarity.name.lowercase()
 

@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.stratum.core.designsystem.component.ActionEmphasis
@@ -37,11 +38,15 @@ import com.stratum.feature.play.PlayScreen
 import com.stratum.core.domain.content.ContentPack
 import com.stratum.feature.forge.ForgeScreen
 import com.stratum.feature.forge.ForgeViewModel
+import com.stratum.feature.forge.SpriteForgeScreen
+import com.stratum.feature.forge.SpriteForgeViewModel
+import com.stratum.feature.play.DrawableSprite
+import com.stratum.feature.play.SpriteKey
 import com.stratum.feature.play.PlayScreen as PlayScreenRoute
 import com.stratum.feature.play.PlayViewModel
 
 /** Top-level destinations. Deliberately few: the game is the app, not a tab in it. */
-private enum class Destination { HOME, PLAY, FORGE, SETTINGS, STUDIO }
+private enum class Destination { HOME, PLAY, FORGE, SPRITES, SETTINGS, STUDIO }
 
 /**
  * The app shell.
@@ -70,6 +75,31 @@ fun StratumApp(
     val context = LocalContext.current
     val ai = remember(context) { AiWiring(context) }
 
+    // Sheets generated this session join the loaded packs, so a drawing made
+    // five minutes ago is used by the world exactly like one a pack shipped.
+    var spriteRevision by remember { mutableStateOf(0) }
+    val spriteSheets = remember(spriteRevision) { ai.sprites.all() }
+    val contentWithSprites = remember(content, spriteSheets) {
+        content.withSpriteSheets(spriteSheets)
+    }
+
+    val spriteResolver = remember(spriteRevision, contentWithSprites) {
+        { key: SpriteKey ->
+            val sheet = when (key) {
+                SpriteKey.Player ->
+                    contentWithSprites.spriteSheets.firstOrNull { it.id.startsWith("hero:") }
+                is SpriteKey.Monster ->
+                    contentWithSprites.sheetForEnemy(key.definitionId)
+                        ?: contentWithSprites.spriteSheets.firstOrNull { it.id.startsWith("monster:") }
+            }
+            sheet?.let { found ->
+                ai.sprites.bitmapFor(found.id)?.let { bitmap ->
+                    DrawableSprite(found, bitmap.asImageBitmap())
+                }
+            }
+        }
+    }
+
     when (destination) {
         Destination.HOME -> HomeScreen(
             packName = content.packs.joinToString(" + ") { it.name },
@@ -81,6 +111,8 @@ fun StratumApp(
                 destination = Destination.PLAY
             },
             onForge = { destination = Destination.FORGE },
+            onSprites = { destination = Destination.SPRITES },
+            spriteCount = spriteSheets.size,
             onSettings = { destination = Destination.SETTINGS },
             onStudio = { destination = Destination.STUDIO },
             modifier = modifier,
@@ -89,9 +121,12 @@ fun StratumApp(
         Destination.PLAY -> {
             // Keyed so forging a pack or starting a new run builds a fresh
             // session rather than reusing the previous world.
-            key(content, config) {
+            key(contentWithSprites, config) {
                 val viewModel: PlayViewModel = viewModel(
-                    factory = PlayViewModel.factory(content, config),
+                    factory = PlayViewModel.factory(
+                        contentWithSprites, config,
+                        spriteResolver = spriteResolver,
+                    ),
                 )
                 PlayScreenRoute(
                     viewModel = viewModel,
@@ -118,6 +153,31 @@ fun StratumApp(
             )
         }
 
+        Destination.SPRITES -> {
+            val spriteViewModel: SpriteForgeViewModel = viewModel(
+                factory = SpriteForgeViewModel.factory(
+                    generateSheet = ai.generateSpriteSheet,
+                    saveSheet = { sheet, bytes ->
+                        ai.sprites.save(sheet, bytes)
+                        spriteRevision++
+                    },
+                    loadSheets = ai.sprites::all,
+                    deleteSheet = { id ->
+                        ai.sprites.delete(id)
+                        spriteRevision++
+                    },
+                    isProviderConfigured = ai::isConfigured,
+                ),
+            )
+            SpriteForgeScreen(
+                viewModel = spriteViewModel,
+                modifier = modifier,
+                onBack = { destination = Destination.HOME },
+                onOpenSettings = { destination = Destination.SETTINGS },
+                previewFor = { id -> ai.sprites.bitmapFor(id)?.asImageBitmap() },
+            )
+        }
+
         Destination.SETTINGS -> ProviderSettingsScreen(
             initial = ai.settings.load(),
             onSave = ai.settings::save,
@@ -141,6 +201,8 @@ private fun HomeScreen(
     classCount: Int,
     onDescend: () -> Unit,
     onForge: () -> Unit,
+    onSprites: () -> Unit,
+    spriteCount: Int,
     onSettings: () -> Unit,
     onStudio: () -> Unit,
     modifier: Modifier = Modifier,
@@ -209,6 +271,13 @@ private fun HomeScreen(
             StratumAction(
                 label = "Forge a pack with AI",
                 onClick = onForge,
+                emphasis = ActionEmphasis.SECONDARY,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(Space.small))
+            StratumAction(
+                label = if (spriteCount > 0) "Sprite forge ($spriteCount)" else "Sprite forge",
+                onClick = onSprites,
                 emphasis = ActionEmphasis.SECONDARY,
                 modifier = Modifier.fillMaxWidth(),
             )

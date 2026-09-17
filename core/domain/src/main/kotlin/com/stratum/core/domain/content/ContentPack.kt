@@ -8,6 +8,7 @@ import com.stratum.core.domain.item.AffixDefinition
 import com.stratum.core.domain.item.ItemRarity
 import com.stratum.core.domain.item.RarityStyle
 import com.stratum.core.domain.item.WeaponBase
+import com.stratum.core.domain.sprite.SpriteSheet
 import com.stratum.core.domain.world.BlockType
 
 /**
@@ -39,6 +40,8 @@ data class ContentPack(
     val enemies: List<EnemyDefinition> = emptyList(),
     val skills: List<SkillDefinition> = emptyList(),
     val rarityStyles: List<RarityStyle> = emptyList(),
+    /** Sheets shipped by the pack. Generated sheets join these at runtime. */
+    val spriteSheets: List<SpriteSheet> = emptyList(),
 ) {
     val blockCount: Int get() = blocks.size
 
