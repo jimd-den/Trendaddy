@@ -36,6 +36,7 @@ import com.stratum.core.designsystem.theme.Cut
 import com.stratum.core.designsystem.theme.Space
 import com.stratum.core.designsystem.theme.StratumTheme
 import com.stratum.core.domain.actor.SkillDefinition
+import com.stratum.engine.world.BuildTool
 import com.stratum.core.domain.world.World
 
 /**
@@ -60,6 +61,10 @@ fun PlayScreen(
         onLongPressBlock = viewModel::place,
         onMoveInput = viewModel::setMoveInput,
         onDodge = viewModel::dodge,
+        onToggleBuild = viewModel::toggleBuildMode,
+        onSelectBuildTool = viewModel::selectBuildTool,
+        onBuildDrag = viewModel::previewBuild,
+        onBuildCommit = viewModel::commitBuild,
         onSelectSlot = viewModel::selectSlot,
         onZoom = viewModel::zoom,
         onStopMining = viewModel::stopMining,
@@ -79,6 +84,10 @@ fun PlayScreenContent(
     onLongPressBlock: (com.stratum.core.domain.world.BlockPos) -> Unit = {},
     onMoveInput: (Float, Float) -> Unit = { _, _ -> },
     onDodge: () -> Unit = {},
+    onToggleBuild: () -> Unit = {},
+    onSelectBuildTool: (BuildTool) -> Unit = {},
+    onBuildDrag: (com.stratum.core.domain.world.BlockPos, com.stratum.core.domain.world.BlockPos) -> Unit = { _, _ -> },
+    onBuildCommit: () -> Unit = {},
     onSelectSlot: (Int) -> Unit = {},
     onZoom: (Float) -> Unit = {},
     onStopMining: () -> Unit = {},
@@ -108,6 +117,11 @@ fun PlayScreenContent(
                 spriteFor = state.spriteFor,
                 playerAnimation = state.playerAnimation,
                 animationFor = state.animationFor,
+                buildPreview = state.buildPreview,
+                buildAffordable = state.buildAffordable,
+                buildMode = state.buildMode,
+                onBuildDrag = onBuildDrag,
+                onBuildCommit = onBuildCommit,
                 revision = state.worldRevision,
                 frame = state.frame,
                 modifier = Modifier.fillMaxSize(),
@@ -185,6 +199,8 @@ fun PlayScreenContent(
             world = world,
             onMoveInput = onMoveInput,
             onDodge = onDodge,
+            onToggleBuild = onToggleBuild,
+            onSelectBuildTool = onSelectBuildTool,
             onSelectSlot = onSelectSlot,
             onStopMining = onStopMining,
             onAttack = onAttack,
@@ -263,6 +279,8 @@ private fun ControlBand(
     world: World,
     onMoveInput: (Float, Float) -> Unit,
     onDodge: () -> Unit,
+    onToggleBuild: () -> Unit,
+    onSelectBuildTool: (BuildTool) -> Unit,
     onSelectSlot: (Int) -> Unit,
     onStopMining: () -> Unit,
     onAttack: () -> Unit,
@@ -283,7 +301,11 @@ private fun ControlBand(
         ) {
             SectionLabel(state.biomeName.ifBlank { "Uncharted" })
             Text(
-                text = state.message ?: "Tap to mine, hold to build",
+                text = state.message ?: if (state.buildMode) {
+                    "Drag to place"
+                } else {
+                    "Tap to mine, hold to build"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.inkMuted,
             )
@@ -335,7 +357,34 @@ private fun ControlBand(
             }
         }
 
-        if (state.skills.isNotEmpty()) {
+        Spacer(Modifier.height(Space.medium))
+        StratumAction(
+            label = if (state.buildMode) "Building" else "Build",
+            onClick = onToggleBuild,
+            emphasis = if (state.buildMode) ActionEmphasis.PRIMARY else ActionEmphasis.SECONDARY,
+        )
+        // Tools get their own row: five chips beside the toggle overflowed the
+        // band and clipped the last one, which reads as broken rather than
+        // scrollable.
+        if (state.buildMode) {
+            Spacer(Modifier.height(Space.small))
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Space.small),
+            ) {
+                items(BuildTool.entries, key = { it.name }) { tool ->
+                    StratumChip(
+                        label = tool.label,
+                        selected = state.buildTool == tool,
+                        onClick = { onSelectBuildTool(tool) },
+                    )
+                }
+            }
+        }
+
+        // The skill bar is hidden while building: it is the wrong tool set, and
+        // the band gets too tall on a phone with both.
+        if (state.skills.isNotEmpty() && !state.buildMode) {
             Spacer(Modifier.height(Space.medium))
             SkillBar(state = state, onCastSkill = onCastSkill)
         }

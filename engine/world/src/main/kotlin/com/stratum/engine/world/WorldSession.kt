@@ -745,6 +745,99 @@ class WorldSession(
             .transitionTo(state)
             .advanced(deltaMs)
 
+    // ---- building ---------------------------------------------------------
+
+    private val roomScanner = RoomScanner(streamingWorld)
+
+    /**
+     * Blocks a pending build would place, for the ghost preview. Empty when not
+     * building.
+     */
+    var buildPreview: List<BlockPos> = emptyList()
+        private set
+
+    var buildTool: BuildTool = BuildTool.SINGLE
+        private set
+
+    fun selectBuildTool(tool: BuildTool) {
+        buildTool = tool
+        buildPreview = emptyList()
+    }
+
+    /**
+     * Previews what a drag from [from] to [to] would build. Nothing is placed;
+     * this exists so the player sees the shape before spending the blocks.
+     */
+    fun previewBuild(from: BlockPos, to: BlockPos): BuildPreview {
+        val blockId = player.selectedBlockId
+            ?: return BuildPreview(emptyList(), 0, 0, false).also { buildPreview = emptyList() }
+
+        val planned = BuildPlanner.plan(buildTool, from, to)
+        // Only cells that are actually free: the preview should show what will
+        // happen, not what was asked for.
+        val placeable = planned.filter { pos ->
+            pos.z in 0 until Chunk.HEIGHT &&
+                streamingWorld.isLoaded(pos.chunkPos) &&
+                streamingWorld.blockAt(pos).isAir &&
+                pos != player.feet &&
+                pos != player.feet.above()
+        }
+        buildPreview = placeable
+
+        val held = player.countOf(blockId)
+        return BuildPreview(
+            positions = placeable,
+            required = placeable.size,
+            held = held,
+            affordable = held >= placeable.size,
+        )
+    }
+
+    fun cancelBuild() {
+        buildPreview = emptyList()
+    }
+
+    /**
+     * Commits the previewed build, spending one held block per cell.
+     *
+     * Partial builds are allowed: running out halfway through leaves what was
+     * afforded rather than refusing the whole thing, which is what a player
+     * expects from a drag that was slightly too ambitious.
+     */
+    fun commitBuild(): BuildResult {
+        val blockId = player.selectedBlockId ?: return BuildResult.NothingSelected
+        val planned = buildPreview
+        if (planned.isEmpty()) return BuildResult.NothingToBuild
+
+        val index = content.registry.indexOrNull(blockId) ?: return BuildResult.NothingSelected
+        var placed = 0
+
+        for (pos in planned) {
+            val spent = player.consuming(blockId) ?: break
+            if (!streamingWorld.setBlock(pos, index)) continue
+            player = spent
+            placed++
+        }
+
+        buildPreview = emptyList()
+        if (placed == 0) return BuildResult.OutOfBlocks
+
+        feedbackLog.add(
+            kind = FeedbackKind.LOOT,
+            text = "Built $placed",
+            origin = player.position,
+            color = FEEDBACK_BUILT,
+        )
+        return BuildResult.Built(placed, planned.size - placed)
+    }
+
+    /**
+     * The room the player is standing in, if any. Recomputed on demand rather
+     * than cached: walls change constantly while building, and a stale answer
+     * would be worse than none.
+     */
+    fun shelter(): RoomScan = roomScanner.scan(player.blockPos)
+
     /** Skills the class has, resolved against the loaded packs. */
     val skills: List<SkillDefinition> get() = player.skillIds.mapNotNull(content::skill)
 
@@ -769,6 +862,8 @@ class WorldSession(
         feedback = feedback,
         playerFlash = hitFlashes.intensity(PLAYER_ACTOR_ID),
         playerAnimation = animationFor(PLAYER_ACTOR_ID),
+        buildPreview = buildPreview,
+        buildTool = buildTool,
         worldRevision = streamingWorld.loadedChunks.sumOf { it.revision },
         enemies = enemies,
         groundLoot = groundLoot,
@@ -805,6 +900,7 @@ class WorldSession(
         private const val FEEDBACK_BLOCKED = 0xFF9A96A8L
         private const val FEEDBACK_HEAL = 0xFF7BC67EL
         private const val FEEDBACK_LEVEL = 0xFFFFC107L
+        private const val FEEDBACK_BUILT = 0xFF8FB8DEL
         private val SPAWN_CHUNK = com.stratum.core.domain.world.ChunkPos(0, 0)
     }
 }
@@ -830,12 +926,33 @@ data class SessionSnapshot(
     val feedback: List<FeedbackMark> = emptyList(),
     val playerFlash: Float = 0f,
     val playerAnimation: AnimationPlayback = AnimationPlayback(),
+    val buildPreview: List<BlockPos> = emptyList(),
+    val buildTool: BuildTool = BuildTool.SINGLE,
     /** Changes when any loaded chunk changes, so the renderer knows to redraw. */
     val worldRevision: Int,
     val enemies: List<EnemyInstance> = emptyList(),
     val groundLoot: List<GroundLoot> = emptyList(),
     val skills: List<SkillDefinition> = emptyList(),
 )
+
+/** What a pending build would cost and cover. */
+data class BuildPreview(
+    val positions: List<BlockPos>,
+    val required: Int,
+    val held: Int,
+    val affordable: Boolean,
+) {
+    val isEmpty: Boolean get() = positions.isEmpty()
+}
+
+sealed interface BuildResult {
+    /** [short] is how many cells were skipped for want of blocks. */
+    data class Built(val placed: Int, val short: Int) : BuildResult
+
+    data object NothingSelected : BuildResult
+    data object NothingToBuild : BuildResult
+    data object OutOfBlocks : BuildResult
+}
 
 /** An item lying in the world. */
 data class GroundLoot(val item: ItemInstance, val position: WorldPoint)

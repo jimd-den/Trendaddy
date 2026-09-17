@@ -14,6 +14,8 @@ import com.stratum.core.domain.world.WorldPoint
 import com.stratum.engine.world.IsometricProjection
 import com.stratum.engine.world.AttackReport
 import com.stratum.engine.world.CombatEvent
+import com.stratum.engine.world.BuildResult
+import com.stratum.engine.world.BuildTool
 import com.stratum.engine.world.DodgeResult
 import com.stratum.core.domain.sprite.AnimationPlayback
 import com.stratum.engine.world.FeedbackMark
@@ -199,6 +201,45 @@ class PlayViewModel(
         }
     }
 
+    // ---- building --------------------------------------------------------
+
+    fun toggleBuildMode() {
+        val entering = !_state.value.buildMode
+        if (!entering) session.cancelBuild()
+        // Digging and building share the screen, so entering build mode has to
+        // stop any dig in progress or the first drag does both.
+        stopMining()
+        _state.value = _state.value.copy(buildMode = entering, buildAffordable = true)
+        publish()
+    }
+
+    fun selectBuildTool(tool: BuildTool) {
+        session.selectBuildTool(tool)
+        publish()
+    }
+
+    fun previewBuild(from: BlockPos, to: BlockPos) {
+        val preview = session.previewBuild(from, to)
+        _state.value = _state.value.copy(buildAffordable = preview.affordable)
+        publish()
+    }
+
+    fun commitBuild() {
+        when (val result = session.commitBuild()) {
+            is BuildResult.Built ->
+                publish(
+                    message = if (result.short > 0) {
+                        "Built ${result.placed}, ${result.short} short"
+                    } else {
+                        "Built ${result.placed}"
+                    },
+                )
+            BuildResult.OutOfBlocks -> publish(message = "Out of blocks")
+            BuildResult.NothingSelected -> publish(message = "Nothing selected to build with")
+            BuildResult.NothingToBuild -> publish()
+        }
+    }
+
     fun place(target: BlockPos) {
         when (val result = session.place(target)) {
             is PlaceResult.Placed -> publish(message = "Placed ${result.block.displayName}")
@@ -230,6 +271,8 @@ class PlayViewModel(
             playerAnimation = snapshot.playerAnimation,
             animationFor = session::animationFor,
             spriteFor = spriteResolver,
+            buildPreview = snapshot.buildPreview,
+            buildTool = snapshot.buildTool,
             skills = snapshot.skills,
             frame = _state.value.frame + 1,
             message = message ?: _state.value.message,
@@ -304,6 +347,10 @@ data class PlayUiState(
     val playerAnimation: AnimationPlayback = AnimationPlayback(),
     val animationFor: (String) -> AnimationPlayback = { AnimationPlayback() },
     val spriteFor: (SpriteKey) -> DrawableSprite? = { null },
+    val buildMode: Boolean = false,
+    val buildPreview: List<BlockPos> = emptyList(),
+    val buildTool: BuildTool = BuildTool.SINGLE,
+    val buildAffordable: Boolean = true,
     val skills: List<SkillDefinition> = emptyList(),
     /** Advances every tick so the canvas redraws while the fight is moving. */
     val frame: Int = 0,

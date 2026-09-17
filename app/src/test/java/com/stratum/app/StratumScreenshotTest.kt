@@ -112,6 +112,45 @@ class StratumScreenshotTest {
     }
 
     @Test
+    fun build_mode() {
+        val content = GameSetup.assemble()
+        val session = WorldSession(content, WorldConfig(seed = 99L, simulationRadius = 2))
+        repeat(20) { session.tick(0.2f) }
+
+        // A room ghosted but not yet committed: the shape the player is about
+        // to commit to is the whole point of the preview.
+        val feet = session.player.blockPos
+        session.selectBuildTool(com.stratum.engine.world.BuildTool.ROOM)
+        session.previewBuild(
+            com.stratum.core.domain.world.BlockPos(feet.x + 2, feet.y + 1, feet.z),
+            com.stratum.core.domain.world.BlockPos(feet.x + 7, feet.y + 6, feet.z),
+        )
+
+        composeTestRule.setContent {
+            StratumTheme(palette = content.palette, darkTheme = true) {
+                PlayScreenContent(
+                    state = PlayUiState(
+                        player = session.player,
+                        camera = session.player.position,
+                        projection = IsometricProjection(zoom = 1f),
+                        palette = content.palette,
+                        biomeName = session.currentBiome.name,
+                        enemies = session.enemies,
+                        skills = session.skills,
+                        buildMode = true,
+                        buildPreview = session.buildPreview,
+                        buildTool = com.stratum.engine.world.BuildTool.ROOM,
+                        buildAffordable = true,
+                    ),
+                    world = session.world,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        composeTestRule.onRoot().captureRoboImage(filePath = "src/test/screenshots/build.png")
+    }
+
+    @Test
     fun forge_screen() {
         // Rendered with a result in hand, because the preview after generation
         // is the part of this screen worth guarding against regressions.

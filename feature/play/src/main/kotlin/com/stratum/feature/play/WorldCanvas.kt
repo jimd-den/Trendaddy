@@ -1,6 +1,7 @@
 package com.stratum.feature.play
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -62,6 +63,12 @@ fun WorldCanvas(
     spriteFor: (SpriteKey) -> DrawableSprite? = { null },
     playerAnimation: AnimationPlayback = AnimationPlayback(),
     animationFor: (String) -> AnimationPlayback = { AnimationPlayback() },
+    /** Cells a pending build would fill, drawn as a ghost before committing. */
+    buildPreview: List<BlockPos> = emptyList(),
+    buildAffordable: Boolean = true,
+    buildMode: Boolean = false,
+    onBuildDrag: (from: BlockPos, to: BlockPos) -> Unit = { _, _ -> },
+    onBuildCommit: () -> Unit = {},
     /** Redrawn whenever this changes; the world itself is mutable and not a Compose state. */
     revision: Int,
     /** Changes every frame while a fight is running, to force a redraw. */
@@ -71,7 +78,33 @@ fun WorldCanvas(
     onLongPressBlock: (BlockPos) -> Unit = {},
 ) {
     Canvas(
-        modifier = modifier.pointerInput(projection, revision) {
+        modifier = modifier
+            .pointerInput(buildMode, projection, revision) {
+                if (!buildMode) return@pointerInput
+                // Build drags are their own gesture: mining and building share a
+                // surface, and a drag that both dug and built would be unusable.
+                var anchor: BlockPos? = null
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        anchor = pick(world, projection, camera, size.width.toFloat(), size.height.toFloat(), offset)
+                        anchor?.let { onBuildDrag(it, it) }
+                    },
+                    onDrag = { change, _ ->
+                        change.consume()
+                        val start = anchor ?: return@detectDragGestures
+                        pick(
+                            world, projection, camera,
+                            size.width.toFloat(), size.height.toFloat(), change.position,
+                        )?.let { onBuildDrag(start, it) }
+                    },
+                    onDragEnd = {
+                        onBuildCommit()
+                        anchor = null
+                    },
+                    onDragCancel = { anchor = null },
+                )
+            }
+            .pointerInput(projection, revision) {
             detectTapGestures(
                 onTap = { offset ->
                     pick(world, projection, camera, size.width.toFloat(), size.height.toFloat(), offset)
@@ -119,6 +152,16 @@ fun WorldCanvas(
                     highlighted = pos == highlight,
                     accent = Color(block.accentColor),
                 )
+            }
+        }
+
+        // The ghost sits above terrain but below actors, so the player is never
+        // hidden behind their own plan.
+        if (buildPreview.isNotEmpty()) {
+            val ghost = if (buildAffordable) GHOST_OK else GHOST_SHORT
+            buildPreview.sortedBy { projection.depthKey(it) }.forEach { pos ->
+                val screen = projection.project(pos)
+                drawGhost(originX + screen.x, originY + screen.y, projection, ghost)
             }
         }
 
@@ -198,6 +241,52 @@ private sealed interface Actor {
     data class Loot(val loot: GroundLoot) : Actor {
         override val position: WorldPoint get() = loot.position
     }
+}
+
+/**
+ * One cell of a pending build: the top face outlined and washed, so the shape
+ * reads without hiding the ground it will sit on.
+ */
+private fun DrawScope.drawGhost(
+    x: Float,
+    y: Float,
+    projection: IsometricProjection,
+    tint: Color,
+) {
+    val halfWidth = projection.tileWidth * projection.zoom / 2f
+    val halfHeight = projection.tileHeight * projection.zoom / 2f
+
+    val lift = projection.blockHeight * projection.zoom
+
+    // The whole cube, not just its lid. A room's walls are stacked cells, and
+    // drawing only top faces made a wall look like a floating grid rather than
+    // something with height.
+    val left = Path().apply {
+        moveTo(x - halfWidth, y)
+        lineTo(x, y + halfHeight)
+        lineTo(x, y + halfHeight + lift)
+        lineTo(x - halfWidth, y + lift)
+        close()
+    }
+    val right = Path().apply {
+        moveTo(x + halfWidth, y)
+        lineTo(x, y + halfHeight)
+        lineTo(x, y + halfHeight + lift)
+        lineTo(x + halfWidth, y + lift)
+        close()
+    }
+    val top = Path().apply {
+        moveTo(x, y - halfHeight)
+        lineTo(x + halfWidth, y)
+        lineTo(x, y + halfHeight)
+        lineTo(x - halfWidth, y)
+        close()
+    }
+
+    drawPath(left, tint.copy(alpha = 0.16f))
+    drawPath(right, tint.copy(alpha = 0.10f))
+    drawPath(top, tint.copy(alpha = 0.30f))
+    drawPath(top, tint, style = Stroke(width = 2f))
 }
 
 /**
@@ -609,6 +698,8 @@ private const val SPREAD_BUCKETS = 5
 private const val SPREAD_FRACTION = 0.16f
 private const val SPRITE_SCALE = 1.35f
 private val INVULNERABLE_RING = Color(0xFF7FD4E0)
+private val GHOST_OK = Color(0xFF8FB8DE)
+private val GHOST_SHORT = Color(0xFFD2544B)
 internal val PLAYER_BODY = Color(0xFFF4EBDC)
 internal val PLAYER_EDGE = Color(0xFF14110E)
 internal val PLAYER_RING = Color(0xFFCD7F32)
