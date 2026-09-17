@@ -14,12 +14,18 @@ import kotlin.math.floor
  * matters for sprite art that must not shimmer when the camera moves.
  */
 data class IsometricProjection(
-    /** Screen width of one block's top face. */
-    val tileWidth: Float = 64f,
+    /**
+     * Screen width of one block's top face.
+     *
+     * Sized so a phone shows roughly a dozen blocks across rather than thirty.
+     * At the old scale the character was a speck and the terrain read as
+     * texture; this is close enough to see what you are fighting.
+     */
+    val tileWidth: Float = 96f,
     /** Screen height of one block's top face; half the width gives the 2:1 look. */
-    val tileHeight: Float = 32f,
+    val tileHeight: Float = 48f,
     /** Screen height gained per z level. */
-    val blockHeight: Float = 32f,
+    val blockHeight: Float = 48f,
     val zoom: Float = 1f,
 ) {
     private val halfWidth get() = tileWidth * zoom / 2f
@@ -130,6 +136,43 @@ data class IsometricProjection(
             minY = minY - EDGE_PADDING,
             maxY = maxY + EDGE_PADDING,
         )
+    }
+
+    /**
+     * Whether a column's drawn band touches the viewport at all.
+     *
+     * [visibleRange] has to assume a column could be as tall as the world, so it
+     * returns a generous box — on a phone that is an order of magnitude more
+     * columns than the screen can show. This is the exact test, applied per
+     * column once its real height is known, and it is what keeps the draw loop
+     * proportional to what is on screen rather than to what is loaded.
+     *
+     * [topZ] is the column's surface; [bottomZ] the lowest level the renderer
+     * will draw for it.
+     */
+    fun isColumnOnScreen(
+        x: Int,
+        y: Int,
+        topZ: Int,
+        bottomZ: Int,
+        originX: Float,
+        originY: Float,
+        viewportWidth: Float,
+        viewportHeight: Float,
+    ): Boolean {
+        // Horizontal position does not depend on z, so this half is exact and
+        // costs nothing: it is the same test whatever height the column is.
+        val centreX = originX + (x - y) * halfWidth
+        if (centreX + halfWidth < 0f || centreX - halfWidth > viewportWidth) return false
+
+        val topY = originY + (x + y) * halfHeight - topZ * liftPerLevel
+        // The band runs from the top face's upper tip down past the lowest
+        // block's base, which sits a block-height below its own centre.
+        val bottomY = originY + (x + y) * halfHeight - bottomZ * liftPerLevel +
+            halfHeight + liftPerLevel
+        if (bottomY < 0f || topY - halfHeight > viewportHeight) return false
+
+        return true
     }
 
     private companion object {

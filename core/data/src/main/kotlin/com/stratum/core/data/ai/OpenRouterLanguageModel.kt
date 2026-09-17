@@ -131,6 +131,12 @@ class OpenRouterLanguageModel(
 data class ProviderConfig(
     val apiKey: String = "",
     val model: String = "google/gemini-2.0-flash-exp:free",
+    /**
+     * Kept separate from [model]: the model that writes a content pack is
+     * almost never the one that draws a sprite sheet, and making the player
+     * swap a single field between tasks is a trap.
+     */
+    val imageModel: String = "google/gemini-2.5-flash-image",
     val baseUrl: String = "https://openrouter.ai/api/v1/",
     val displayName: String = "OpenRouter",
     val refererUrl: String = "https://github.com/jimd-den/Trendaddy",

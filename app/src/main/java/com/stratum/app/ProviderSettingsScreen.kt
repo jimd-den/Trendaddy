@@ -27,6 +27,7 @@ import com.stratum.core.designsystem.component.SectionLabel
 import com.stratum.core.designsystem.component.StratumAction
 import com.stratum.core.designsystem.component.StratumPanel
 import com.stratum.core.designsystem.theme.Space
+import com.stratum.core.designsystem.theme.safeContent
 import com.stratum.core.designsystem.theme.StratumTheme
 
 /**
@@ -46,6 +47,7 @@ fun ProviderSettingsScreen(
     val colors = StratumTheme.colors
     var apiKey by remember { mutableStateOf(initial.apiKey) }
     var model by remember { mutableStateOf(initial.model) }
+    var imageModel by remember { mutableStateOf(initial.imageModel) }
     var baseUrl by remember { mutableStateOf(initial.baseUrl) }
     var saved by remember { mutableStateOf(false) }
 
@@ -53,6 +55,7 @@ fun ProviderSettingsScreen(
         modifier = modifier
             .fillMaxSize()
             .background(colors.surface)
+            .safeContent()
             .verticalScroll(rememberScrollState())
             .padding(Space.large),
     ) {
@@ -90,7 +93,22 @@ fun ProviderSettingsScreen(
                 value = model,
                 onValueChange = { model = it; saved = false },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Model") },
+                label = { Text("Text model") },
+                placeholder = { Text("google/gemini-2.0-flash-exp:free") },
+                supportingText = { Text("Writes content packs and lore.") },
+                singleLine = true,
+            )
+            Spacer(Modifier.height(Space.medium))
+            // Its own field, because the model that writes a pack is almost
+            // never the one that can draw a sprite sheet. One field shared
+            // between the two jobs meant whichever you set broke the other.
+            OutlinedTextField(
+                value = imageModel,
+                onValueChange = { imageModel = it; saved = false },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Image model") },
+                placeholder = { Text("google/gemini-2.5-flash-image") },
+                supportingText = { Text("Draws sprite sheets.") },
                 singleLine = true,
             )
             Spacer(Modifier.height(Space.medium))
@@ -107,11 +125,15 @@ fun ProviderSettingsScreen(
             StratumAction(
                 label = if (saved) "Saved" else "Save",
                 onClick = {
+                    // Copied from what was loaded rather than built fresh, so a
+                    // field this screen does not show is carried through instead
+                    // of being silently reset to its default on every save.
                     onSave(
-                        ProviderConfig(
+                        initial.copy(
                             apiKey = apiKey.trim(),
-                            model = model.trim(),
-                            baseUrl = baseUrl.trim(),
+                            model = model.trim().ifBlank { initial.model },
+                            imageModel = imageModel.trim().ifBlank { initial.imageModel },
+                            baseUrl = baseUrl.trim().ifBlank { initial.baseUrl },
                         ),
                     )
                     saved = true

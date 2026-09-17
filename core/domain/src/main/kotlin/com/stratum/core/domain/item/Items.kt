@@ -134,12 +134,34 @@ data class ItemInstance(
     val toolTier: Int,
     val baseArmour: Int,
     val affixes: List<AffixRoll> = emptyList(),
+    val sockets: SocketSet = SocketSet.NONE,
 ) {
     val averageDamage: Int get() = (minDamage + maxDamage) / 2
 
     /** Extra mining speed from affixes, applied by the interaction system. */
     val miningSpeedBonus: Float
         get() = affixes.filter { it.stat == AffixStat.MINING_SPEED }.sumOf { it.value.toDouble() }.toFloat()
+
+    val socketCount: Int get() = sockets.capacity
+
+    val hasFreeSocket: Boolean get() = sockets.hasSpace
+
+    /**
+     * The item's contribution to its wearer's stats, including whatever is
+     * slotted into it. Inserts are resolved through the supplied lookup rather
+     * than stored, so a pack changing an insert's numbers changes every weapon
+     * carrying one.
+     */
+    fun toStats(inserts: (String) -> InsertDefinition?): CombatStats {
+        val slotted = sockets.insertIds.mapNotNull(inserts)
+        return toStats() + SocketResolver.statsFor(slotted)
+    }
+
+    fun damageTypeWithSockets(inserts: (String) -> InsertDefinition?): String =
+        SocketResolver.damageTypeFor(damageTypeId, sockets.insertIds.mapNotNull(inserts))
+
+    fun miningSpeedWithSockets(inserts: (String) -> InsertDefinition?): Float =
+        miningSpeedBonus + SocketResolver.miningBonusFor(sockets.insertIds.mapNotNull(inserts))
 
     /**
      * The item's contribution to its wearer's stats. Base damage folds into

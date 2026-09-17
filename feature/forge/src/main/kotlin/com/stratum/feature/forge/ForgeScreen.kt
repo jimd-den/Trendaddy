@@ -19,6 +19,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -32,6 +33,7 @@ import com.stratum.core.designsystem.component.StratumPanel
 import com.stratum.core.designsystem.component.StratumSection
 import com.stratum.core.designsystem.component.StratumWell
 import com.stratum.core.designsystem.theme.Space
+import com.stratum.core.designsystem.theme.safeContent
 import com.stratum.core.designsystem.theme.StratumTheme
 import com.stratum.core.domain.content.ContentPack
 
@@ -49,6 +51,11 @@ fun ForgeScreen(
     onBack: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
 ) {
+    // Re-read the provider on every visit. The view model outlives this screen,
+    // so without this a key saved in settings a moment ago is still reported as
+    // missing until the app is restarted.
+    LaunchedEffect(Unit) { viewModel.refreshProviderStatus() }
+
     val state by viewModel.state.collectAsStateWithLifecycle()
     ForgeScreenContent(
         state = state,
@@ -81,6 +88,7 @@ fun ForgeScreenContent(
         modifier = modifier
             .fillMaxSize()
             .background(colors.surface)
+            .safeContent()
             .verticalScroll(rememberScrollState())
             .padding(Space.large),
     ) {

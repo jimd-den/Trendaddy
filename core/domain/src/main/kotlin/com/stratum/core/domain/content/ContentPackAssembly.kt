@@ -4,9 +4,11 @@ import com.stratum.core.domain.actor.EnemyDefinition
 import com.stratum.core.domain.actor.SkillDefinition
 import com.stratum.core.domain.combat.DamageTypeDefinition
 import com.stratum.core.domain.item.AffixDefinition
+import com.stratum.core.domain.item.InsertDefinition
 import com.stratum.core.domain.item.ItemRarity
 import com.stratum.core.domain.item.RarityStyle
 import com.stratum.core.domain.item.WeaponBase
+import com.stratum.core.domain.sprite.SpriteSheet
 import com.stratum.core.domain.world.BlockRegistry
 import kotlinx.coroutines.flow.Flow
 
@@ -29,10 +31,12 @@ class ContentPackAssembler {
         val lore = LinkedHashMap<String, LoreEntry>()
         val damageTypes = LinkedHashMap<String, DamageTypeDefinition>()
         val affixes = LinkedHashMap<String, AffixDefinition>()
+        val inserts = LinkedHashMap<String, InsertDefinition>()
         val weapons = LinkedHashMap<String, WeaponBase>()
         val enemies = LinkedHashMap<String, EnemyDefinition>()
         val skills = LinkedHashMap<String, SkillDefinition>()
         val rarityStyles = LinkedHashMap<ItemRarity, RarityStyle>()
+        val spriteSheets = LinkedHashMap<String, SpriteSheet>()
         val overrides = mutableListOf<PackOverride>()
 
         packs.forEach { pack ->
@@ -54,9 +58,11 @@ class ContentPackAssembler {
             pack.loreEntries.forEach { entry -> lore[entry.id] = entry }
             pack.damageTypes.forEach { type -> damageTypes[type.id] = type }
             pack.affixes.forEach { affix -> affixes[affix.id] = affix }
+            pack.inserts.forEach { insert -> inserts[insert.id] = insert }
             pack.weapons.forEach { weapon -> weapons[weapon.id] = weapon }
             pack.skills.forEach { skill -> skills[skill.id] = skill }
             pack.rarityStyles.forEach { style -> rarityStyles[style.rarity] = style }
+            pack.spriteSheets.forEach { sheet -> spriteSheets[sheet.id] = sheet }
             pack.enemies.forEach { enemy ->
                 enemies.put(enemy.id, enemy)?.let {
                     overrides += PackOverride(pack.id, enemy.id, OverrideKind.ENEMY)
@@ -67,7 +73,10 @@ class ContentPackAssembler {
         val registry = BlockRegistry.build(blocks.values.toList())
         val resolvedBiomes = biomes.values.toList()
         validate(registry, resolvedBiomes)
-        validateCombat(damageTypes.keys, weapons.values, enemies.values, skills.values, affixes.values)
+        validateCombat(
+            damageTypes.keys, weapons.values, enemies.values,
+            skills.values, affixes.values, inserts.values,
+        )
 
         return AssembledContent(
             packs = packs,
@@ -78,10 +87,12 @@ class ContentPackAssembler {
             palette = packs.last().palette,
             damageTypes = damageTypes.values.toList(),
             affixes = affixes.values.toList(),
+            inserts = inserts.values.toList(),
             weapons = weapons.values.toList(),
             enemies = enemies.values.toList(),
             skills = skills.values.toList(),
             rarityStyles = rarityStyles,
+            spriteSheets = spriteSheets.values.toList(),
             overrides = overrides,
         )
     }
@@ -117,18 +128,21 @@ class ContentPackAssembler {
         enemies: Collection<EnemyDefinition>,
         skills: Collection<SkillDefinition>,
         affixes: Collection<AffixDefinition>,
+        insertList: Collection<InsertDefinition>,
     ) {
         if (damageTypeIds.isEmpty() && weapons.isEmpty() && enemies.isEmpty()) return
 
         val missing = mutableListOf<String>()
         weapons.filterNot { it.damageTypeId in damageTypeIds }
-            .forEach { missing += "weapon '${'$'}{it.id}' uses unknown damage type '${'$'}{it.damageTypeId}'" }
+            .forEach { missing += "weapon '${it.id}' uses unknown damage type '${it.damageTypeId}'" }
         enemies.filterNot { it.damageTypeId in damageTypeIds }
-            .forEach { missing += "enemy '${'$'}{it.id}' uses unknown damage type '${'$'}{it.damageTypeId}'" }
+            .forEach { missing += "enemy '${it.id}' uses unknown damage type '${it.damageTypeId}'" }
         skills.filterNot { it.damageTypeId in damageTypeIds }
-            .forEach { missing += "skill '${'$'}{it.id}' uses unknown damage type '${'$'}{it.damageTypeId}'" }
+            .forEach { missing += "skill '${it.id}' uses unknown damage type '${it.damageTypeId}'" }
         affixes.filter { it.damageTypeId != null && it.damageTypeId !in damageTypeIds }
-            .forEach { missing += "affix '${'$'}{it.id}' resists unknown damage type '${'$'}{it.damageTypeId}'" }
+            .forEach { missing += "affix '${it.id}' resists unknown damage type '${it.damageTypeId}'" }
+        insertList.filter { it.damageTypeId != null && it.damageTypeId !in damageTypeIds }
+            .forEach { missing += "insert '${it.id}' names unknown damage type '${it.damageTypeId}'" }
 
         if (missing.isNotEmpty()) {
             throw ContentPackException(missing.joinToString("; "))
@@ -146,10 +160,12 @@ data class AssembledContent(
     val palette: PackPalette,
     val damageTypes: List<DamageTypeDefinition> = emptyList(),
     val affixes: List<AffixDefinition> = emptyList(),
+    val inserts: List<InsertDefinition> = emptyList(),
     val weapons: List<WeaponBase> = emptyList(),
     val enemies: List<EnemyDefinition> = emptyList(),
     val skills: List<SkillDefinition> = emptyList(),
     val rarityStyles: Map<ItemRarity, RarityStyle> = emptyMap(),
+    val spriteSheets: List<SpriteSheet> = emptyList(),
     /** Reported to the player so a pack silently reskinning another is visible. */
     val overrides: List<PackOverride> = emptyList(),
 ) {
@@ -168,6 +184,26 @@ data class AssembledContent(
     fun skill(id: String): SkillDefinition? = skills.firstOrNull { it.id == id }
 
     fun weapon(id: String): WeaponBase? = weapons.firstOrNull { it.id == id }
+
+    fun insert(id: String): InsertDefinition? = inserts.firstOrNull { it.id == id }
+
+    fun spriteSheet(id: String?): SpriteSheet? =
+        id?.let { wanted -> spriteSheets.firstOrNull { it.id == wanted } }
+
+    /**
+     * The sheet an actor should be drawn with, or null to fall back to the
+     * shape renderer. Looked up by the definition's own sprite set id.
+     */
+    fun sheetForEnemy(definitionId: String): SpriteSheet? =
+        spriteSheet(enemies.firstOrNull { it.id == definitionId }?.spriteSetId)
+
+    fun sheetForHero(heroClassId: String): SpriteSheet? =
+        spriteSheet(heroClasses.firstOrNull { it.id == heroClassId }?.spriteSetId)
+
+    /** A copy with extra sheets layered on, for sheets generated this session. */
+    fun withSpriteSheets(extra: List<SpriteSheet>): AssembledContent =
+        if (extra.isEmpty()) this
+        else copy(spriteSheets = (spriteSheets + extra).distinctBy { it.id })
 
     fun rarityName(rarity: ItemRarity): String = rarityStyles[rarity]?.name ?: rarity.name.lowercase()
 

@@ -13,6 +13,7 @@ import com.stratum.core.domain.content.HeroClassDefinition
 import com.stratum.core.domain.item.AffixDefinition
 import com.stratum.core.domain.item.AffixKind
 import com.stratum.core.domain.item.AffixStat
+import com.stratum.core.domain.item.InsertDefinition
 import com.stratum.core.domain.item.WeaponBase
 import com.stratum.core.domain.content.ScatterRule
 import com.stratum.core.domain.world.BlockMaterial
@@ -126,6 +127,32 @@ object TestContent {
 
     val weapons = listOf(club, pick, greatsword)
 
+    val sharpBead = InsertDefinition(
+        id = "test:sharp_bead",
+        name = "Sharp Bead",
+        stat = AffixStat.ATTACK_POWER,
+        value = 7f,
+    )
+
+    val emberShard = InsertDefinition(
+        id = "test:ember_shard",
+        name = "Ember Shard",
+        stat = AffixStat.ATTACK_POWER,
+        value = 3f,
+        damageTypeId = fire.id,
+        convertsDamageType = true,
+    )
+
+    val deepBead = InsertDefinition(
+        id = "test:deep_bead",
+        name = "Deep Bead",
+        stat = AffixStat.MAX_HEALTH,
+        value = 30f,
+        minItemLevel = 20,
+    )
+
+    val inserts = listOf(sharpBead, emberShard, deepBead)
+
     val rat = EnemyDefinition(
         id = "test:rat",
         name = "Rat",
@@ -215,6 +242,7 @@ object TestContent {
         heroClasses = listOf(digger),
         damageTypes = listOf(physical, fire),
         affixes = affixes,
+        inserts = inserts,
         weapons = weapons,
         enemies = enemies,
         skills = skills,

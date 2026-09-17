@@ -1,6 +1,7 @@
 package com.stratum.feature.play
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -10,13 +11,24 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import com.stratum.core.domain.actor.EnemyInstance
+import com.stratum.core.domain.sprite.AnimationPlayback
+import com.stratum.core.domain.sprite.SpriteFacing
+import com.stratum.core.domain.sprite.SpriteSheet
 import com.stratum.core.domain.world.BlockPos
 import com.stratum.core.domain.world.Direction
 import com.stratum.core.domain.world.Chunk
 import com.stratum.core.domain.world.World
 import com.stratum.core.domain.world.WorldPoint
+import com.stratum.engine.world.FeedbackKind
+import com.stratum.engine.world.FeedbackMark
+import com.stratum.engine.world.GroundInsert
 import com.stratum.engine.world.GroundLoot
 import com.stratum.engine.world.IsometricProjection
 
@@ -37,6 +49,30 @@ fun WorldCanvas(
     playerAccent: Color = PLAYER_RING,
     enemies: List<EnemyInstance> = emptyList(),
     groundLoot: List<GroundLoot> = emptyList(),
+    groundInserts: List<GroundInsert> = emptyList(),
+    /** Resolves a dropped insert's colour; nulls fall back to a neutral tint. */
+    insertColor: (String) -> Long? = { null },
+    feedback: List<FeedbackMark> = emptyList(),
+    /** 0..1, how recently the player was hit. Drives the hurt tint. */
+    playerFlash: Float = 0f,
+    /** Rolling players are drawn flattened and trailing. */
+    isRolling: Boolean = false,
+    isInvulnerable: Boolean = false,
+    flashFor: (String) -> Float = { 0f },
+    /**
+     * Supplies the drawn sheet for an actor, or null to fall back to shapes.
+     * Every actor without art still renders, which is what lets sprites arrive
+     * one generation at a time rather than all or nothing.
+     */
+    spriteFor: (SpriteKey) -> DrawableSprite? = { null },
+    playerAnimation: AnimationPlayback = AnimationPlayback(),
+    animationFor: (String) -> AnimationPlayback = { AnimationPlayback() },
+    /** Cells a pending build would fill, drawn as a ghost before committing. */
+    buildPreview: List<BlockPos> = emptyList(),
+    buildAffordable: Boolean = true,
+    buildMode: Boolean = false,
+    onBuildDrag: (from: BlockPos, to: BlockPos) -> Unit = { _, _ -> },
+    onBuildCommit: () -> Unit = {},
     /** Redrawn whenever this changes; the world itself is mutable and not a Compose state. */
     revision: Int,
     /** Changes every frame while a fight is running, to force a redraw. */
@@ -46,7 +82,33 @@ fun WorldCanvas(
     onLongPressBlock: (BlockPos) -> Unit = {},
 ) {
     Canvas(
-        modifier = modifier.pointerInput(projection, revision) {
+        modifier = modifier
+            .pointerInput(buildMode, projection, revision, world) {
+                if (!buildMode) return@pointerInput
+                // Build drags are their own gesture: mining and building share a
+                // surface, and a drag that both dug and built would be unusable.
+                var anchor: BlockPos? = null
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        anchor = pick(world, projection, camera, size.width.toFloat(), size.height.toFloat(), offset)
+                        anchor?.let { onBuildDrag(it, it) }
+                    },
+                    onDrag = { change, _ ->
+                        change.consume()
+                        val start = anchor ?: return@detectDragGestures
+                        pick(
+                            world, projection, camera,
+                            size.width.toFloat(), size.height.toFloat(), change.position,
+                        )?.let { onBuildDrag(start, it) }
+                    },
+                    onDragEnd = {
+                        onBuildCommit()
+                        anchor = null
+                    },
+                    onDragCancel = { anchor = null },
+                )
+            }
+            .pointerInput(projection, revision, world) {
             detectTapGestures(
                 onTap = { offset ->
                     pick(world, projection, camera, size.width.toFloat(), size.height.toFloat(), offset)
@@ -69,6 +131,11 @@ fun WorldCanvas(
 
         val range = projection.visibleRange(size.width, size.height, originX, originY)
 
+        // Allocated once and rewound per block. A path per face per block per
+        // frame was tens of thousands of short-lived objects a second, and the
+        // collector spent more time on them than the renderer did drawing.
+        val faces = BlockFaces()
+
         range.forEachColumnInDrawOrder { x, y ->
             val surface = world.surfaceAt(x, y)
             if (surface < 0) return@forEachColumnInDrawOrder
@@ -76,6 +143,17 @@ fun WorldCanvas(
             // Draw a few levels below the surface so cliff faces have sides
             // rather than floating tops.
             val floor = maxOf(0, surface - VISIBLE_DEPTH)
+
+            // The range is a generous box; this is the exact test. Without it
+            // every loaded column is drawn, on screen or not.
+            if (!projection.isColumnOnScreen(
+                    x, y, surface, floor,
+                    originX, originY, size.width, size.height,
+                )
+            ) {
+                return@forEachColumnInDrawOrder
+            }
+
             for (z in floor..surface) {
                 val pos = BlockPos(x, y, z)
                 val block = world.blockAt(pos)
@@ -93,7 +171,18 @@ fun WorldCanvas(
                     sideColor = Color(block.sideColor),
                     highlighted = pos == highlight,
                     accent = Color(block.accentColor),
+                    faces = faces,
                 )
+            }
+        }
+
+        // The ghost sits above terrain but below actors, so the player is never
+        // hidden behind their own plan.
+        if (buildPreview.isNotEmpty()) {
+            val ghost = if (buildAffordable) GHOST_OK else GHOST_SHORT
+            buildPreview.sortedBy { projection.depthKey(it) }.forEach { pos ->
+                val screen = projection.project(pos)
+                drawGhost(originX + screen.x, originY + screen.y, projection, ghost)
             }
         }
 
@@ -102,6 +191,7 @@ fun WorldCanvas(
         // in front of another draws over it.
         val actors = buildList {
             groundLoot.forEach { add(Actor.Loot(it)) }
+            groundInserts.forEach { add(Actor.Insert(it)) }
             enemies.filter { it.isAlive }.forEach { add(Actor.Monster(it)) }
             add(Actor.Player(playerPosition))
         }.sortedBy { projection.depthKey(it.position) }
@@ -112,9 +202,58 @@ fun WorldCanvas(
             val y = originY + screen.y
             when (actor) {
                 is Actor.Loot -> drawLoot(x, y, projection, Color(actor.loot.item.rarity.beamColor()))
-                is Actor.Monster -> drawEnemy(x, y, projection, actor.enemy)
-                is Actor.Player -> drawPlayer(x, y, projection, playerFacing, playerAccent)
+                // Inserts get the same beam at half height: unmistakably loot,
+                // unmistakably not a weapon.
+                is Actor.Insert -> drawInsert(
+                    x, y, projection,
+                    Color(insertColor(actor.ground.insertId) ?: DEFAULT_INSERT_TINT),
+                )
+                is Actor.Monster -> {
+                    val sprite = spriteFor(SpriteKey.Monster(actor.enemy.definitionId))
+                    if (sprite != null) {
+                        drawSprite(
+                            x, y, projection, sprite,
+                            animationFor(actor.enemy.instanceId),
+                            SpriteFacing.of(0, 1),
+                            flashFor(actor.enemy.instanceId),
+                        )
+                        drawEnemyOverlay(x, y, projection, actor.enemy)
+                    } else {
+                        drawEnemy(x, y, projection, actor.enemy, flashFor(actor.enemy.instanceId))
+                    }
+                }
+                is Actor.Player -> {
+                    val sprite = spriteFor(SpriteKey.Player)
+                    if (sprite != null) {
+                        drawSprite(
+                            x, y, projection, sprite, playerAnimation,
+                            SpriteFacing.of(playerFacing.dx, playerFacing.dy),
+                            playerFlash,
+                        )
+                        if (isInvulnerable) {
+                            val r = projection.tileWidth * projection.zoom * 0.22f
+                            drawCircle(
+                                INVULNERABLE_RING,
+                                r * 1.9f,
+                                Offset(x, y - projection.blockHeight * projection.zoom * 0.5f),
+                                style = Stroke(3f),
+                            )
+                        }
+                    } else {
+                        drawPlayer(
+                            x, y, projection, playerFacing, playerAccent,
+                            hurt = playerFlash, rolling = isRolling, invulnerable = isInvulnerable,
+                        )
+                    }
+                }
             }
+        }
+
+        // Feedback last and unsorted by depth: a damage number must never be
+        // hidden behind the thing it refers to.
+        feedback.sortedBy { it.id }.forEach { mark ->
+            val screen = projection.project(mark.origin)
+            drawFeedback(originX + screen.x, originY + screen.y, projection, mark)
         }
     }
 }
@@ -130,6 +269,130 @@ private sealed interface Actor {
     data class Loot(val loot: GroundLoot) : Actor {
         override val position: WorldPoint get() = loot.position
     }
+    data class Insert(val ground: GroundInsert) : Actor {
+        override val position: WorldPoint get() = ground.position
+    }
+}
+
+/**
+ * One cell of a pending build: the top face outlined and washed, so the shape
+ * reads without hiding the ground it will sit on.
+ */
+private fun DrawScope.drawGhost(
+    x: Float,
+    y: Float,
+    projection: IsometricProjection,
+    tint: Color,
+) {
+    val halfWidth = projection.tileWidth * projection.zoom / 2f
+    val halfHeight = projection.tileHeight * projection.zoom / 2f
+
+    val lift = projection.blockHeight * projection.zoom
+
+    // The whole cube, not just its lid. A room's walls are stacked cells, and
+    // drawing only top faces made a wall look like a floating grid rather than
+    // something with height.
+    val left = Path().apply {
+        moveTo(x - halfWidth, y)
+        lineTo(x, y + halfHeight)
+        lineTo(x, y + halfHeight + lift)
+        lineTo(x - halfWidth, y + lift)
+        close()
+    }
+    val right = Path().apply {
+        moveTo(x + halfWidth, y)
+        lineTo(x, y + halfHeight)
+        lineTo(x, y + halfHeight + lift)
+        lineTo(x + halfWidth, y + lift)
+        close()
+    }
+    val top = Path().apply {
+        moveTo(x, y - halfHeight)
+        lineTo(x + halfWidth, y)
+        lineTo(x, y + halfHeight)
+        lineTo(x - halfWidth, y)
+        close()
+    }
+
+    drawPath(left, tint.copy(alpha = 0.16f))
+    drawPath(right, tint.copy(alpha = 0.10f))
+    drawPath(top, tint.copy(alpha = 0.30f))
+    drawPath(top, tint, style = Stroke(width = 2f))
+}
+
+/**
+ * Draws one frame of a sprite sheet, sized to the world grid.
+ *
+ * Frames are cut with nearest-neighbour filtering: sprite art is pixel art, and
+ * smoothing it on scale-up is the difference between crisp and mushy.
+ */
+private fun DrawScope.drawSprite(
+    x: Float,
+    y: Float,
+    projection: IsometricProjection,
+    sprite: DrawableSprite,
+    playback: AnimationPlayback,
+    facing: SpriteFacing,
+    flash: Float,
+) {
+    val sheet = sprite.sheet
+    val frame = sheet.frameFor(playback.frameIn(sheet), facing)
+    val rect = sheet.frameRect(frame)
+
+    // Drawn a little larger than a block so a character reads against terrain,
+    // and anchored at the feet rather than the centre so a tall sprite grows
+    // upward instead of sinking into the ground.
+    val drawWidth = projection.tileWidth * projection.zoom * SPRITE_SCALE
+    val drawHeight = drawWidth * (rect.height.toFloat() / rect.width.coerceAtLeast(1))
+    val left = (x - drawWidth / 2f).toInt()
+    val top = (y - drawHeight + projection.tileHeight * projection.zoom * 0.25f).toInt()
+
+    drawImage(
+        image = sprite.image,
+        srcOffset = IntOffset(rect.left, rect.top),
+        srcSize = IntSize(rect.width, rect.height),
+        dstOffset = IntOffset(left, top),
+        dstSize = IntSize(drawWidth.toInt(), drawHeight.toInt()),
+        filterQuality = FilterQuality.None,
+        alpha = 1f,
+    )
+
+    if (flash > 0f) {
+        drawImage(
+            image = sprite.image,
+            srcOffset = IntOffset(rect.left, rect.top),
+            srcSize = IntSize(rect.width, rect.height),
+            dstOffset = IntOffset(left, top),
+            dstSize = IntSize(drawWidth.toInt(), drawHeight.toInt()),
+            filterQuality = FilterQuality.None,
+            alpha = flash * 0.75f,
+            colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White),
+        )
+    }
+}
+
+/** Health bar and rank ring, drawn over a sprite that has no such affordances. */
+private fun DrawScope.drawEnemyOverlay(
+    x: Float,
+    y: Float,
+    projection: IsometricProjection,
+    enemy: EnemyInstance,
+) {
+    if (enemy.healthFraction >= 1f) return
+    val scale = projection.tileWidth * projection.zoom
+    val barWidth = scale * 0.42f
+    val barTop = y - scale * 0.95f
+
+    drawRect(
+        color = Color.Black.copy(alpha = 0.6f),
+        topLeft = Offset(x - barWidth / 2f, barTop),
+        size = Size(barWidth, HEALTH_BAR_HEIGHT),
+    )
+    drawRect(
+        color = ENEMY_HEALTH,
+        topLeft = Offset(x - barWidth / 2f, barTop),
+        size = Size(barWidth * enemy.healthFraction, HEALTH_BAR_HEIGHT),
+    )
 }
 
 /**
@@ -143,6 +406,7 @@ private fun DrawScope.drawEnemy(
     y: Float,
     projection: IsometricProjection,
     enemy: EnemyInstance,
+    flash: Float = 0f,
 ) {
     val scale = projection.tileWidth * projection.zoom
     val radius = scale * 0.16f * enemy.rank.sizeMultiplier()
@@ -153,7 +417,16 @@ private fun DrawScope.drawEnemy(
         topLeft = Offset(x - radius, y - radius * 0.5f),
         size = Size(radius * 2f, radius),
     )
-    drawCircle(Color(enemy.bodyColor), radius, Offset(x, y - lift))
+    // Lerping toward white rather than overlaying keeps the silhouette
+    // readable at the moment of impact, which is when it matters most.
+    val body = Color(enemy.bodyColor)
+    val lit = Color(
+        red = body.red + (1f - body.red) * flash,
+        green = body.green + (1f - body.green) * flash,
+        blue = body.blue + (1f - body.blue) * flash,
+        alpha = 1f,
+    )
+    drawCircle(lit, radius * (1f + flash * HIT_SWELL), Offset(x, y - lift))
     drawCircle(
         Color.Black.copy(alpha = 0.5f),
         radius,
@@ -208,6 +481,25 @@ private fun DrawScope.drawLoot(
     drawPath(diamond, Color.Black.copy(alpha = 0.6f), style = Stroke(1.5f))
 }
 
+/** A dropped insert: a small bright bead, under a short beam of its own colour. */
+private fun DrawScope.drawInsert(
+    x: Float,
+    y: Float,
+    projection: IsometricProjection,
+    color: Color,
+) {
+    val scale = projection.tileWidth * projection.zoom
+    val radius = scale * 0.07f
+
+    drawRect(
+        color = color.copy(alpha = 0.22f),
+        topLeft = Offset(x - radius * 0.4f, y - scale * 0.45f),
+        size = Size(radius * 0.8f, scale * 0.45f),
+    )
+    drawCircle(color, radius, Offset(x, y))
+    drawCircle(Color.Black.copy(alpha = 0.55f), radius, Offset(x, y), style = Stroke(1.5f))
+}
+
 /** Bigger ranks are literally bigger, which reads faster than any label. */
 private fun com.stratum.core.domain.actor.EnemyRank.sizeMultiplier(): Float = when (this) {
     com.stratum.core.domain.actor.EnemyRank.MINION -> 1f
@@ -230,6 +522,8 @@ private fun com.stratum.core.domain.item.ItemRarity.beamColor(): Long = when (th
     com.stratum.core.domain.item.ItemRarity.EPIC -> 0xFFFF7043
     com.stratum.core.domain.item.ItemRarity.RELIC -> 0xFF26A69A
 }
+
+private const val DEFAULT_INSERT_TINT = 0xFF7FD4E0L
 
 private val ENEMY_HEALTH = Color(0xFFD2544B)
 private const val HEALTH_BAR_HEIGHT = 3f
@@ -272,42 +566,58 @@ private fun DrawScope.drawBlock(
     sideColor: Color,
     accent: Color,
     highlighted: Boolean,
+    faces: BlockFaces,
 ) {
     val halfWidth = projection.tileWidth * projection.zoom / 2f
     val halfHeight = projection.tileHeight * projection.zoom / 2f
     val lift = projection.blockHeight * projection.zoom
 
-    val top = Path().apply {
-        moveTo(centerX, centerY - halfHeight)
-        lineTo(centerX + halfWidth, centerY)
-        lineTo(centerX, centerY + halfHeight)
-        lineTo(centerX - halfWidth, centerY)
-        close()
-    }
+    faces.shapeFor(centerX, centerY, halfWidth, halfHeight, lift)
 
-    val leftFace = Path().apply {
-        moveTo(centerX - halfWidth, centerY)
-        lineTo(centerX, centerY + halfHeight)
-        lineTo(centerX, centerY + halfHeight + lift)
-        lineTo(centerX - halfWidth, centerY + lift)
-        close()
-    }
-
-    val rightFace = Path().apply {
-        moveTo(centerX + halfWidth, centerY)
-        lineTo(centerX, centerY + halfHeight)
-        lineTo(centerX, centerY + halfHeight + lift)
-        lineTo(centerX + halfWidth, centerY + lift)
-        close()
-    }
-
-    drawPath(leftFace, sideColor.scaleRgb(LEFT_FACE_SHADE))
-    drawPath(rightFace, sideColor.scaleRgb(RIGHT_FACE_SHADE))
-    drawPath(top, topColor)
+    drawPath(faces.left, sideColor.scaleRgb(LEFT_FACE_SHADE))
+    drawPath(faces.right, sideColor.scaleRgb(RIGHT_FACE_SHADE))
+    drawPath(faces.top, topColor)
 
     if (highlighted) {
-        drawPath(top, accent.copy(alpha = 0.35f))
-        drawPath(top, accent, style = Stroke(width = 2f))
+        drawPath(faces.top, accent.copy(alpha = 0.35f))
+        drawPath(faces.top, accent, style = Stroke(width = 2f))
+    }
+}
+
+/**
+ * The three faces of a block, reused across every block in a frame.
+ *
+ * A block is always the same six-sided shape in a different place, so the paths
+ * are rewound and refilled rather than rebuilt. At a thousand-odd blocks a frame
+ * and sixty frames a second, allocating them was the single largest source of
+ * garbage in the app.
+ */
+private class BlockFaces {
+    val top = Path()
+    val left = Path()
+    val right = Path()
+
+    fun shapeFor(cx: Float, cy: Float, halfWidth: Float, halfHeight: Float, lift: Float) {
+        top.rewind()
+        top.moveTo(cx, cy - halfHeight)
+        top.lineTo(cx + halfWidth, cy)
+        top.lineTo(cx, cy + halfHeight)
+        top.lineTo(cx - halfWidth, cy)
+        top.close()
+
+        left.rewind()
+        left.moveTo(cx - halfWidth, cy)
+        left.lineTo(cx, cy + halfHeight)
+        left.lineTo(cx, cy + halfHeight + lift)
+        left.lineTo(cx - halfWidth, cy + lift)
+        left.close()
+
+        right.rewind()
+        right.moveTo(cx + halfWidth, cy)
+        right.lineTo(cx, cy + halfHeight)
+        right.lineTo(cx, cy + halfHeight + lift)
+        right.lineTo(cx + halfWidth, cy + lift)
+        right.close()
     }
 }
 
@@ -324,6 +634,9 @@ private fun DrawScope.drawPlayer(
     projection: IsometricProjection,
     facing: Direction = Direction.SOUTH,
     accent: Color = PLAYER_RING,
+    hurt: Float = 0f,
+    rolling: Boolean = false,
+    invulnerable: Boolean = false,
 ) {
     val scale = projection.tileWidth * projection.zoom
     val radius = scale * 0.22f
@@ -337,8 +650,27 @@ private fun DrawScope.drawPlayer(
     )
 
     drawCircle(accent.copy(alpha = 0.25f), radius * 1.5f, center)
-    drawCircle(PLAYER_BODY, radius, center)
+
+    // Taking a hit washes the body red; a roll squashes it, which reads as
+    // ducking without needing an animation frame.
+    val body = Color(
+        red = PLAYER_BODY.red + (1f - PLAYER_BODY.red) * 0f + hurt * (1f - PLAYER_BODY.red) * 0f,
+        green = PLAYER_BODY.green * (1f - hurt * 0.55f),
+        blue = PLAYER_BODY.blue * (1f - hurt * 0.55f),
+        alpha = 1f,
+    )
+    val squash = if (rolling) ROLL_SQUASH else 1f
+    drawOval(
+        color = body,
+        topLeft = Offset(center.x - radius, center.y - radius * squash),
+        size = Size(radius * 2f, radius * 2f * squash),
+    )
     drawCircle(PLAYER_EDGE, radius, center, style = Stroke(2.5f))
+
+    // An i-frame ring: the player needs to know the window is still open.
+    if (invulnerable) {
+        drawCircle(INVULNERABLE_RING, radius * 1.9f, center, style = Stroke(3f))
+    }
     drawCircle(accent, radius * 1.5f, center, style = Stroke(2f))
 
     // Facing wedge, projected onto the isometric axes so "east" points where
@@ -364,6 +696,57 @@ private fun DrawScope.drawPlayer(
     drawPath(wedge, accent)
 }
 
+/**
+ * One floating mark: rises, drifts and fades over its lifetime.
+ *
+ * Drawn with a dark backing pass so a number stays readable over pale terrain
+ * without needing a panel behind it.
+ */
+private fun DrawScope.drawFeedback(
+    x: Float,
+    y: Float,
+    projection: IsometricProjection,
+    mark: FeedbackMark,
+) {
+    val progress = mark.progress
+    val scale = projection.tileWidth * projection.zoom
+
+    // Ease out: fast at the moment of the hit, settling as it fades.
+    val rise = (1f - (1f - progress) * (1f - progress)) * scale * RISE_FRACTION
+    val alpha = (1f - progress * progress).coerceIn(0f, 1f)
+    val size = scale * BASE_TEXT_FRACTION * mark.emphasis
+
+    // Marks born in the same instant would otherwise stack pixel-perfect and
+    // read as one number. Spread them by id: deterministic, so a replay draws
+    // the same frame, and enough to separate a nova's worth of hits.
+    val spread = ((mark.id % SPREAD_BUCKETS) - SPREAD_BUCKETS / 2) * scale * SPREAD_FRACTION
+    val cx = x + spread
+    val cy = y - scale * 0.5f - rise - (mark.id % 3) * scale * 0.06f
+
+    drawContext.canvas.nativeCanvas.apply {
+        val paint = android.graphics.Paint().apply {
+            isAntiAlias = true
+            textAlign = android.graphics.Paint.Align.CENTER
+            textSize = size
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+        paint.color = android.graphics.Color.argb((alpha * 200).toInt().coerceIn(0, 255), 0, 0, 0)
+        paint.style = android.graphics.Paint.Style.STROKE
+        paint.strokeWidth = size * 0.16f
+        drawText(mark.text, cx, cy, paint)
+
+        val base = mark.color.toInt()
+        paint.style = android.graphics.Paint.Style.FILL
+        paint.color = android.graphics.Color.argb(
+            (alpha * 255).toInt().coerceIn(0, 255),
+            android.graphics.Color.red(base),
+            android.graphics.Color.green(base),
+            android.graphics.Color.blue(base),
+        )
+        drawText(mark.text, cx, cy, paint)
+    }
+}
+
 private fun Color.scaleRgb(factor: Float) = Color(
     red = (red * factor).coerceIn(0f, 1f),
     green = (green * factor).coerceIn(0f, 1f),
@@ -375,7 +758,26 @@ private fun Color.scaleRgb(factor: Float) = Color(
 private const val LEFT_FACE_SHADE = 0.72f
 private const val RIGHT_FACE_SHADE = 0.52f
 private const val VISIBLE_DEPTH = 6
+private const val HIT_SWELL = 0.18f
+private const val ROLL_SQUASH = 0.62f
+private const val RISE_FRACTION = 0.85f
+private const val BASE_TEXT_FRACTION = 0.26f
+private const val SPREAD_BUCKETS = 5
+private const val SPREAD_FRACTION = 0.16f
+private const val SPRITE_SCALE = 1.35f
+private val INVULNERABLE_RING = Color(0xFF7FD4E0)
+private val GHOST_OK = Color(0xFF8FB8DE)
+private val GHOST_SHORT = Color(0xFFD2544B)
 internal val PLAYER_BODY = Color(0xFFF4EBDC)
 internal val PLAYER_EDGE = Color(0xFF14110E)
 internal val PLAYER_RING = Color(0xFFCD7F32)
 private const val FACING_REACH = 1f
+
+/** Identifies which actor a sprite is wanted for. */
+sealed interface SpriteKey {
+    data object Player : SpriteKey
+    data class Monster(val definitionId: String) : SpriteKey
+}
+
+/** A sheet paired with its decoded pixels, ready to draw. */
+data class DrawableSprite(val sheet: SpriteSheet, val image: ImageBitmap)

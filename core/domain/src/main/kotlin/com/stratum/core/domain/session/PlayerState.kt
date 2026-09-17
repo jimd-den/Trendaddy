@@ -4,6 +4,7 @@ import com.stratum.core.domain.actor.Progression
 import com.stratum.core.domain.actor.SkillCooldowns
 import com.stratum.core.domain.combat.CombatStats
 import com.stratum.core.domain.content.HeroClassDefinition
+import com.stratum.core.domain.item.InsertDefinition
 import com.stratum.core.domain.item.ItemInstance
 import com.stratum.core.domain.world.BlockPos
 import com.stratum.core.domain.world.Direction
@@ -35,6 +36,12 @@ data class PlayerState(
     val equippedWeapon: ItemInstance? = null,
     /** Loot picked up but not equipped. */
     val bag: List<ItemInstance> = emptyList(),
+    /**
+     * Inserts held loose, by definition id and count. Kept apart from
+     * [inventory] because that map feeds the block hotbar: a rune appearing as
+     * something placeable would be a bug the player discovers the hard way.
+     */
+    val insertBag: Map<String, Int> = emptyMap(),
     val skillIds: List<String> = emptyList(),
     val cooldowns: SkillCooldowns = SkillCooldowns(),
     /** Counts down between basic attacks, from the weapon's speed. */
@@ -54,23 +61,37 @@ data class PlayerState(
      * swapping a weapon cannot leave a stale number behind.
      */
     val combatStats: CombatStats
-        get() {
-            val levelled = baseStats.copy(
-                maxHealth = baseStats.maxHealth + Progression.healthBonusFor(level),
-                attackPower = baseStats.attackPower + Progression.attackBonusFor(level),
-            )
-            val weapon = equippedWeapon ?: return levelled
-            val combined = levelled + weapon.toStats()
-            // Attack speed is a base of 1 plus bonuses; the weapon replaces the
-            // base rather than adding to it, or a fast weapon would also inherit
-            // the fists it replaced.
-            return combined.copy(
-                attackSpeed = weapon.baseAttackSpeed + weapon.toStats().attackSpeed,
-                attackRange = weapon.attackRange,
-            )
-        }
+        get() = combatStatsWith { null }
+
+    /**
+     * The same numbers, with whatever is slotted into the weapon counted in.
+     *
+     * Inserts arrive as a lookup rather than being stored on the item, so the
+     * pack stays the single source of truth for what a rune is worth: rebalance
+     * a rune and every weapon carrying one rebalances with it.
+     */
+    fun combatStatsWith(inserts: (String) -> InsertDefinition?): CombatStats {
+        val levelled = baseStats.copy(
+            maxHealth = baseStats.maxHealth + Progression.healthBonusFor(level),
+            attackPower = baseStats.attackPower + Progression.attackBonusFor(level),
+        )
+        val weapon = equippedWeapon ?: return levelled
+        val fromWeapon = weapon.toStats(inserts)
+        val combined = levelled + fromWeapon
+        // Attack speed is a base of 1 plus bonuses; the weapon replaces the
+        // base rather than adding to it, or a fast weapon would also inherit
+        // the fists it replaced.
+        return combined.copy(
+            attackSpeed = weapon.baseAttackSpeed + fromWeapon.attackSpeed,
+            attackRange = weapon.attackRange,
+        )
+    }
 
     val maxHealthWithGear: Int get() = combatStats.maxHealth
+
+    /** Health ceiling including inserts, for the session that can resolve them. */
+    fun maxHealthWith(inserts: (String) -> InsertDefinition?): Int =
+        combatStatsWith(inserts).maxHealth
 
     val toolTierWithGear: Int get() = maxOf(toolTier, equippedWeapon?.toolTier ?: 0)
 
@@ -103,6 +124,31 @@ data class PlayerState(
     }
 
     fun collecting(item: ItemInstance): PlayerState = copy(bag = bag + item)
+
+    /** Replaces an item wherever it is held, so slotting edits the thing in hand. */
+    fun replacing(item: ItemInstance): PlayerState = when {
+        equippedWeapon?.instanceId == item.instanceId -> copy(equippedWeapon = item)
+        else -> copy(bag = bag.map { if (it.instanceId == item.instanceId) item else it })
+    }
+
+    /** The item with this id, equipped or bagged. */
+    fun itemById(instanceId: String): ItemInstance? =
+        equippedWeapon?.takeIf { it.instanceId == instanceId }
+            ?: bag.firstOrNull { it.instanceId == instanceId }
+
+    fun insertCount(insertId: String): Int = insertBag[insertId] ?: 0
+
+    fun withInsert(insertId: String, amount: Int = 1): PlayerState =
+        copy(insertBag = insertBag + (insertId to insertCount(insertId) + amount))
+
+    /** Spends one insert, or returns null when the player holds none. */
+    fun consumingInsert(insertId: String): PlayerState? {
+        val held = insertCount(insertId)
+        if (held <= 0) return null
+        return copy(
+            insertBag = if (held == 1) insertBag - insertId else insertBag + (insertId to held - 1),
+        )
+    }
 
     /** True when the item beats what is held on raw damage. */
     fun isUpgrade(item: ItemInstance): Boolean {

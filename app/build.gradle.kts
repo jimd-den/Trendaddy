@@ -119,6 +119,7 @@ dependencies {
   implementation(project(":content:igbo"))
   implementation(project(":feature:play"))
   implementation(project(":feature:forge"))
+  implementation(project(":feature:hero"))
   implementation(project(":core:data"))
   implementation(project(":feature:studio"))
 

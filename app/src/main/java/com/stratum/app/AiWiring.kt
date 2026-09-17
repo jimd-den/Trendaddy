@@ -1,10 +1,13 @@
 package com.stratum.app
 
 import android.content.Context
+import com.stratum.core.data.ai.OpenRouterImageModel
 import com.stratum.core.data.ai.OpenRouterLanguageModel
+import com.stratum.core.data.sprite.SpriteLibrary
 import com.stratum.core.data.settings.ProviderSettingsStore
 import com.stratum.core.domain.ai.GenerateContentPackUseCase
 import com.stratum.core.domain.ai.GenerateLoreUseCase
+import com.stratum.core.domain.ai.GenerateSpriteSheetUseCase
 
 /**
  * Wires the generation use cases to a real provider.
@@ -19,9 +22,16 @@ class AiWiring(context: Context) {
 
     private val languageModel = OpenRouterLanguageModel(configProvider = settings::load)
 
+    private val imageModel = OpenRouterImageModel(configProvider = settings::load)
+
+    /** Generated sheets live on the device, keyed by id. */
+    val sprites = SpriteLibrary(context)
+
     val generateContentPack = GenerateContentPackUseCase(languageModel)
 
     val generateLore = GenerateLoreUseCase(languageModel)
+
+    val generateSpriteSheet = GenerateSpriteSheetUseCase(imageModel)
 
     val modelCatalog = languageModel
 

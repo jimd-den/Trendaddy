@@ -24,8 +24,8 @@ object GameSetup {
     fun worldConfig(seed: Long = System.currentTimeMillis()): WorldConfig = WorldConfig(
         seed = seed,
         simulationRadius = 2,
-        seaLevel = 14,
-        surfaceVariation = 9,
+        seaLevel = 12,
+        surfaceVariation = 4,
         caveDensity = 0.44f,
         oreRichness = 1f,
     )

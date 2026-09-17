@@ -22,19 +22,25 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.stratum.core.designsystem.component.ActionEmphasis
 import com.stratum.core.designsystem.component.SectionLabel
 import com.stratum.core.designsystem.component.StratumAction
 import com.stratum.core.designsystem.component.StratumChip
+import com.stratum.core.designsystem.component.StratumJoystick
 import com.stratum.core.designsystem.component.StratumMeter
 import com.stratum.core.designsystem.component.StratumPanel
 import com.stratum.core.designsystem.component.StratumProgressSliver
 import com.stratum.core.designsystem.theme.Cut
 import com.stratum.core.designsystem.theme.Space
+import com.stratum.core.designsystem.theme.safeBottomPadding
+import com.stratum.core.designsystem.theme.safeContent
+import com.stratum.core.designsystem.theme.safeTop
 import com.stratum.core.designsystem.theme.StratumTheme
 import com.stratum.core.domain.actor.SkillDefinition
+import com.stratum.engine.world.BuildTool
 import com.stratum.core.domain.world.World
 
 /**
@@ -57,12 +63,26 @@ fun PlayScreen(
         modifier = modifier,
         onTapBlock = viewModel::beginMining,
         onLongPressBlock = viewModel::place,
-        onMove = viewModel::move,
+        onMoveInput = viewModel::setMoveInput,
+        onDodge = viewModel::dodge,
+        onToggleBuild = viewModel::toggleBuildMode,
+        onSelectBuildTool = viewModel::selectBuildTool,
+        onBuildDrag = viewModel::previewBuild,
+        onBuildCommit = viewModel::commitBuild,
         onSelectSlot = viewModel::selectSlot,
         onZoom = viewModel::zoom,
         onStopMining = viewModel::stopMining,
         onAttack = viewModel::attack,
         onCastSkill = viewModel::castSkill,
+        onRevive = viewModel::revive,
+        onNewRun = viewModel::newRun,
+        onToggleSatchel = viewModel::toggleSatchel,
+        onEquip = viewModel::equip,
+        onDiscard = viewModel::discard,
+        onToggleAnvil = viewModel::toggleAnvil,
+        onSelectAnvilItem = viewModel::selectAnvilItem,
+        onSlotInsert = viewModel::slotInsert,
+        onUnslotInsert = viewModel::unslotInsert,
         onOpenMenu = onOpenMenu,
     )
 }
@@ -75,12 +95,26 @@ fun PlayScreenContent(
     modifier: Modifier = Modifier,
     onTapBlock: (com.stratum.core.domain.world.BlockPos) -> Unit = {},
     onLongPressBlock: (com.stratum.core.domain.world.BlockPos) -> Unit = {},
-    onMove: (Float, Float) -> Unit = { _, _ -> },
+    onMoveInput: (Float, Float) -> Unit = { _, _ -> },
+    onDodge: () -> Unit = {},
+    onToggleBuild: () -> Unit = {},
+    onSelectBuildTool: (BuildTool) -> Unit = {},
+    onBuildDrag: (com.stratum.core.domain.world.BlockPos, com.stratum.core.domain.world.BlockPos) -> Unit = { _, _ -> },
+    onBuildCommit: () -> Unit = {},
     onSelectSlot: (Int) -> Unit = {},
     onZoom: (Float) -> Unit = {},
     onStopMining: () -> Unit = {},
     onAttack: () -> Unit = {},
     onCastSkill: (String) -> Unit = {},
+    onRevive: () -> Unit = {},
+    onNewRun: () -> Unit = {},
+    onToggleSatchel: () -> Unit = {},
+    onEquip: (String) -> Unit = {},
+    onDiscard: (String) -> Unit = {},
+    onToggleAnvil: () -> Unit = {},
+    onSelectAnvilItem: (String) -> Unit = {},
+    onSlotInsert: (String, String) -> Unit = { _, _ -> },
+    onUnslotInsert: (String, Int) -> Unit = { _, _ -> },
     onOpenMenu: () -> Unit = {},
 ) {
     val colors = StratumTheme.colors
@@ -97,6 +131,21 @@ fun PlayScreenContent(
                 playerAccent = colors.accent,
                 enemies = state.enemies,
                 groundLoot = state.groundLoot,
+                groundInserts = state.groundInserts,
+                insertColor = { state.insertOrNull(it)?.color },
+                feedback = state.feedback,
+                playerFlash = state.playerFlash,
+                isRolling = state.isRolling,
+                isInvulnerable = state.isInvulnerable,
+                flashFor = state.flashFor,
+                spriteFor = state.spriteFor,
+                playerAnimation = state.playerAnimation,
+                animationFor = state.animationFor,
+                buildPreview = state.buildPreview,
+                buildAffordable = state.buildAffordable,
+                buildMode = state.buildMode,
+                onBuildDrag = onBuildDrag,
+                onBuildCommit = onBuildCommit,
                 revision = state.worldRevision,
                 frame = state.frame,
                 modifier = Modifier.fillMaxSize(),
@@ -104,13 +153,15 @@ fun PlayScreenContent(
                 onLongPressBlock = onLongPressBlock,
             )
 
+            // The world draws under the status bar on purpose; the meters over
+            // it do not, or a camera hole lands in the middle of the health bar.
             VitalsOverlay(
                 state = state,
-                modifier = Modifier.align(Alignment.TopStart).padding(Space.medium),
+                modifier = Modifier.align(Alignment.TopStart).safeTop().padding(Space.medium),
             )
 
             Column(
-                modifier = Modifier.align(Alignment.TopEnd).padding(Space.medium),
+                modifier = Modifier.align(Alignment.TopEnd).safeTop().padding(Space.medium),
                 horizontalAlignment = Alignment.End,
             ) {
                 StratumAction(
@@ -119,7 +170,50 @@ fun PlayScreenContent(
                     emphasis = ActionEmphasis.SECONDARY,
                 )
                 Spacer(Modifier.height(Space.small))
+                // Paired rather than stacked: five controls down the right edge
+                // covers the part of the world the player is walking into.
+                Row(horizontalArrangement = Arrangement.spacedBy(Space.small)) {
+                    StratumAction(
+                        label = if (state.player.bag.isEmpty()) "Bag" else "Bag ${state.player.bag.size}",
+                        onClick = onToggleSatchel,
+                        emphasis = if (state.satchelOpen) ActionEmphasis.PRIMARY else ActionEmphasis.SECONDARY,
+                    )
+                    StratumAction(
+                        label = if (state.heldInserts.isEmpty()) "Anvil" else "Anvil ${state.heldInserts.sumOf { it.count }}",
+                        onClick = onToggleAnvil,
+                        emphasis = if (state.anvilOpen) ActionEmphasis.PRIMARY else ActionEmphasis.SECONDARY,
+                    )
+                }
+                Spacer(Modifier.height(Space.small))
                 ZoomControls(onZoom = onZoom)
+            }
+
+            if (state.satchelOpen && !state.anvilOpen && !state.isDead) {
+                SatchelOverlay(
+                    state = state,
+                    world = world,
+                    onEquip = onEquip,
+                    onDiscard = onDiscard,
+                    // The two panels are one errand: read the item here, socket
+                    // it next door, without going back out to the world first.
+                    onOpenAnvil = {
+                        onToggleSatchel()
+                        onToggleAnvil()
+                    },
+                    onClose = onToggleSatchel,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+
+            if (state.anvilOpen && !state.isDead) {
+                AnvilOverlay(
+                    state = state,
+                    onSelectItem = onSelectAnvilItem,
+                    onSlot = onSlotInsert,
+                    onUnslot = onUnslotInsert,
+                    onClose = onToggleAnvil,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
 
             if (state.isDead) {
@@ -129,7 +223,12 @@ fun PlayScreenContent(
                         .background(colors.surface.copy(alpha = 0.82f)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(
+                        modifier = Modifier
+                            .safeContent()
+                            .padding(horizontal = Space.large),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
                         Text(
                             text = "YOU HAVE FALLEN",
                             style = MaterialTheme.typography.headlineMedium,
@@ -142,11 +241,35 @@ fun PlayScreenContent(
                             color = colors.inkMuted,
                         )
                         Spacer(Modifier.height(Space.large))
+                        // Getting back up is the primary action. Being sent to
+                        // a menu to restart is the part that makes people put a
+                        // game down rather than try the fight again.
                         StratumAction(
-                            label = "Return",
-                            onClick = onOpenMenu,
+                            label = "Rise",
+                            onClick = onRevive,
                             emphasis = ActionEmphasis.PRIMARY,
                         )
+                        Spacer(Modifier.height(Space.tight))
+                        Text(
+                            text = "Keep everything. Lose a quarter of the way to your " +
+                                "next level, and walk back.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.inkMuted,
+                            textAlign = TextAlign.Center,
+                        )
+                        Spacer(Modifier.height(Space.medium))
+                        Row(horizontalArrangement = Arrangement.spacedBy(Space.small)) {
+                            StratumAction(
+                                label = "New run",
+                                onClick = onNewRun,
+                                emphasis = ActionEmphasis.SECONDARY,
+                            )
+                            StratumAction(
+                                label = "Menu",
+                                onClick = onOpenMenu,
+                                emphasis = ActionEmphasis.QUIET,
+                            )
+                        }
                     }
                 }
             }
@@ -172,7 +295,10 @@ fun PlayScreenContent(
         ControlBand(
             state = state,
             world = world,
-            onMove = onMove,
+            onMoveInput = onMoveInput,
+            onDodge = onDodge,
+            onToggleBuild = onToggleBuild,
+            onSelectBuildTool = onSelectBuildTool,
             onSelectSlot = onSelectSlot,
             onStopMining = onStopMining,
             onAttack = onAttack,
@@ -249,7 +375,10 @@ private fun ZoomControls(onZoom: (Float) -> Unit, modifier: Modifier = Modifier)
 private fun ControlBand(
     state: PlayUiState,
     world: World,
-    onMove: (Float, Float) -> Unit,
+    onMoveInput: (Float, Float) -> Unit,
+    onDodge: () -> Unit,
+    onToggleBuild: () -> Unit,
+    onSelectBuildTool: (BuildTool) -> Unit,
     onSelectSlot: (Int) -> Unit,
     onStopMining: () -> Unit,
     onAttack: () -> Unit,
@@ -258,10 +387,12 @@ private fun ControlBand(
 ) {
     val colors = StratumTheme.colors
 
+    // The panel itself runs to the screen edge so its surface sits behind the
+    // gesture bar; only what is inside it moves up out of the way.
     StratumPanel(
         modifier = modifier.fillMaxWidth(),
         shape = Cut.large,
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(Space.large),
+        contentPadding = safeBottomPadding(Space.large),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -270,7 +401,11 @@ private fun ControlBand(
         ) {
             SectionLabel(state.biomeName.ifBlank { "Uncharted" })
             Text(
-                text = state.message ?: "Tap to mine, hold to build",
+                text = state.message ?: if (state.buildMode) {
+                    "Drag to place"
+                } else {
+                    "Tap to mine, hold to build"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.inkMuted,
             )
@@ -283,7 +418,14 @@ private fun ControlBand(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            MovementPad(onMove = onMove, onStop = onStopMining)
+            StratumJoystick(
+                onDirection = { x, y ->
+                    // Any stick movement cancels a dig: walking away from a
+                    // block you were mining should not keep mining it.
+                    if (x != 0f || y != 0f) onStopMining()
+                    onMoveInput(x, y)
+                },
+            )
 
             Column(horizontalAlignment = Alignment.End) {
                 Text(
@@ -292,17 +434,57 @@ private fun ControlBand(
                     color = colors.inkMuted,
                 )
                 Spacer(Modifier.height(Space.small))
-                StratumAction(
-                    label = "Strike",
-                    onClick = onAttack,
-                    emphasis = ActionEmphasis.DESTRUCTIVE,
+                Row(horizontalArrangement = Arrangement.spacedBy(Space.small)) {
+                    StratumAction(
+                        label = if (state.rollCooldownFraction > 0f) "Roll…" else "Roll",
+                        onClick = onDodge,
+                        emphasis = ActionEmphasis.SECONDARY,
+                        enabled = state.rollCooldownFraction <= 0f,
+                    )
+                    StratumAction(
+                        label = "Strike",
+                        onClick = onAttack,
+                        emphasis = ActionEmphasis.DESTRUCTIVE,
+                    )
+                }
+                Spacer(Modifier.height(Space.hair))
+                StratumProgressSliver(
+                    fraction = 1f - state.rollCooldownFraction,
+                    tint = colors.accentAlt,
                 )
                 Spacer(Modifier.height(Space.small))
                 Hotbar(state = state, world = world, onSelectSlot = onSelectSlot)
             }
         }
 
-        if (state.skills.isNotEmpty()) {
+        Spacer(Modifier.height(Space.medium))
+        StratumAction(
+            label = if (state.buildMode) "Building" else "Build",
+            onClick = onToggleBuild,
+            emphasis = if (state.buildMode) ActionEmphasis.PRIMARY else ActionEmphasis.SECONDARY,
+        )
+        // Tools get their own row: five chips beside the toggle overflowed the
+        // band and clipped the last one, which reads as broken rather than
+        // scrollable.
+        if (state.buildMode) {
+            Spacer(Modifier.height(Space.small))
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Space.small),
+            ) {
+                items(BuildTool.entries, key = { it.name }) { tool ->
+                    StratumChip(
+                        label = tool.label,
+                        selected = state.buildTool == tool,
+                        onClick = { onSelectBuildTool(tool) },
+                    )
+                }
+            }
+        }
+
+        // The skill bar is hidden while building: it is the wrong tool set, and
+        // the band gets too tall on a phone with both.
+        if (state.skills.isNotEmpty() && !state.buildMode) {
             Spacer(Modifier.height(Space.medium))
             SkillBar(state = state, onCastSkill = onCastSkill)
         }
@@ -345,33 +527,6 @@ private fun SkillBar(
 }
 
 @Composable
-private fun MovementPad(
-    onMove: (Float, Float) -> Unit,
-    onStop: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    // The pad is aligned to the isometric axes, not the screen axes: pressing
-    // "up" walks toward the top of the screen, which is north-west in world
-    // space. Anything else feels broken in an isometric game.
-    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        PadButton("▲") { onStop(); onMove(-STEP, -STEP) }
-        Row {
-            PadButton("◀") { onStop(); onMove(-STEP, STEP) }
-            Spacer(Modifier.width(44.dp))
-            PadButton("▶") { onStop(); onMove(STEP, -STEP) }
-        }
-        PadButton("▼") { onStop(); onMove(STEP, STEP) }
-    }
-}
-
-@Composable
-private fun PadButton(glyph: String, onClick: () -> Unit) {
-    Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-        StratumAction(label = glyph, onClick = onClick, emphasis = ActionEmphasis.SECONDARY)
-    }
-}
-
-@Composable
 private fun Hotbar(
     state: PlayUiState,
     world: World,
@@ -404,5 +559,4 @@ private fun Hotbar(
     }
 }
 
-private const val STEP = 1f
 private const val ZOOM_STEP = 0.2f

@@ -3,8 +3,10 @@ package com.stratum.engine.world
 import com.stratum.core.domain.item.AffixDefinition
 import com.stratum.core.domain.item.AffixKind
 import com.stratum.core.domain.item.AffixRoll
+import com.stratum.core.domain.item.InsertDefinition
 import com.stratum.core.domain.item.ItemInstance
 import com.stratum.core.domain.item.ItemRarity
+import com.stratum.core.domain.item.SocketSet
 import com.stratum.core.domain.item.WeaponBase
 import kotlin.math.roundToInt
 import kotlin.random.Random
@@ -18,6 +20,7 @@ import kotlin.random.Random
 class LootRoller(
     private val weapons: List<WeaponBase>,
     private val affixes: List<AffixDefinition>,
+    private val inserts: List<InsertDefinition> = emptyList(),
 ) {
 
     /**
@@ -57,6 +60,9 @@ class LootRoller(
             toolTier = base.toolTier,
             baseArmour = base.armour,
             affixes = rolled,
+            // Sockets drop empty. The weapon is the frame; what it does is the
+            // player's to decide, and that decision should survive the drop.
+            sockets = SocketSet.of(SocketSet.rolledFor(rarity)),
         )
     }
 
@@ -87,7 +93,20 @@ class LootRoller(
             toolTier = base.toolTier,
             baseArmour = base.armour,
             affixes = rolled,
+            sockets = SocketSet.of(SocketSet.rolledFor(rarity)),
         )
+    }
+
+    /**
+     * Rolls one insert, or null when the pack ships none this item level can
+     * reach. Kept separate from [roll] because an insert is not a weapon with
+     * fewer fields: it drops on its own schedule and stacks rather than being
+     * an instance.
+     */
+    fun rollInsert(itemLevel: Int, random: Random): InsertDefinition? {
+        val eligible = inserts.filter { it.minItemLevel <= itemLevel }
+        if (eligible.isEmpty()) return null
+        return pickWeighted(eligible, random) { it.weight }
     }
 
     /**

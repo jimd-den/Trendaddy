@@ -48,8 +48,11 @@ data class WorldConfig(
     /** Chunks kept resident in each direction from the focus chunk. */
     val simulationRadius: Int = 2,
     val seaLevel: Int = 12,
-    /** Vertical span the generator is allowed to use, capped by [Chunk.HEIGHT]. */
-    val surfaceVariation: Int = 10,
+    /**
+     * Vertical span the generator may use, capped by [Chunk.HEIGHT]. Small by
+     * default: flat ground is walkable ground, and buildable ground.
+     */
+    val surfaceVariation: Int = 4,
     val caveDensity: Float = 0.42f,
     val oreRichness: Float = 1f,
 ) {
