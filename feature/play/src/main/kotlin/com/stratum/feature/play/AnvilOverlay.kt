@@ -33,6 +33,7 @@ import com.stratum.core.designsystem.component.StratumChip
 import com.stratum.core.designsystem.component.StratumPanel
 import com.stratum.core.designsystem.theme.Cut
 import com.stratum.core.designsystem.theme.Space
+import com.stratum.core.designsystem.theme.safeContent
 import com.stratum.core.designsystem.theme.StratumTheme
 import com.stratum.core.domain.item.InsertDefinition
 import com.stratum.core.domain.item.ItemInstance
@@ -69,6 +70,7 @@ fun AnvilOverlay(
     ) {
         StratumPanel(
             modifier = Modifier
+                .safeContent()
                 .fillMaxWidth(0.92f)
                 .clickable(enabled = false, onClick = {}),
             shape = Cut.large,

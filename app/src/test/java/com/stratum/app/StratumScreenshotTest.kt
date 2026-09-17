@@ -2,7 +2,11 @@ package com.stratum.app
 
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.unit.dp
+import com.stratum.core.designsystem.theme.LocalSafeAreaInsets
 import androidx.compose.ui.test.onRoot
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.github.takahirom.roborazzi.captureRoboImage
@@ -148,6 +152,99 @@ class StratumScreenshotTest {
             }
         }
         composeTestRule.onRoot().captureRoboImage(filePath = "src/test/screenshots/build.png")
+    }
+
+    /**
+     * A phone with a punch-hole camera and a gesture bar. Robolectric has no
+     * cutout of its own, so the layout is rendered against a declared one: a
+     * HUD that has never been drawn under a camera hole is a HUD nobody has
+     * checked.
+     */
+    @Test
+    fun play_screen_with_camera_cutout() {
+        val content = GameSetup.assemble()
+        val session = WorldSession(content, WorldConfig(seed = 99L, simulationRadius = 2))
+        repeat(20) { session.tick(0.2f) }
+
+        composeTestRule.setContent {
+            StratumTheme(palette = content.palette, darkTheme = true) {
+                CompositionLocalProvider(
+                    LocalSafeAreaInsets provides WindowInsets(
+                        left = 0.dp, top = 54.dp, right = 0.dp, bottom = 32.dp,
+                    ),
+                ) {
+                    PlayScreenContent(
+                        state = PlayUiState(
+                            player = session.player,
+                            camera = session.player.position,
+                            projection = IsometricProjection(zoom = 1f),
+                            palette = content.palette,
+                            biomeName = session.currentBiome.name,
+                            enemies = session.enemies,
+                            skills = session.skills,
+                        ),
+                        world = session.world,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+        }
+        composeTestRule.onRoot().captureRoboImage(filePath = "src/test/screenshots/play_cutout.png")
+    }
+
+    @Test
+    fun satchel_screen() {
+        val content = GameSetup.assemble()
+        val session = WorldSession(content, WorldConfig(seed = 99L, simulationRadius = 2))
+        repeat(20) { session.tick(0.2f) }
+
+        // A bag with a clear upgrade, a clear downgrade and a socketed relic, so
+        // the compare lines have something to disagree about.
+        val roller = com.stratum.engine.world.LootRoller(content.weapons, content.affixes, content.inserts)
+        listOf(
+            com.stratum.core.domain.item.ItemRarity.RELIC to 28,
+            com.stratum.core.domain.item.ItemRarity.RARE to 14,
+            com.stratum.core.domain.item.ItemRarity.COMMON to 2,
+        ).forEachIndexed { index, (rarity, level) ->
+            // Dropped and walked over rather than written straight into the bag:
+            // the bag is internal to the engine, which is the boundary doing its
+            // job, so the fixture takes the same route a player would.
+            session.dropLoot(
+                roller.craft(
+                    content.weapons[index % content.weapons.size],
+                    itemLevel = level,
+                    rarity = rarity,
+                    random = kotlin.random.Random(index.toLong() + 3),
+                ),
+                session.player.position,
+            )
+            session.tick(0.05f)
+        }
+        content.inserts.take(3).forEach { session.dropInsert(it.id, session.player.position) }
+        session.tick(0.05f)
+
+        composeTestRule.setContent {
+            StratumTheme(palette = content.palette, darkTheme = true) {
+                PlayScreenContent(
+                    state = PlayUiState(
+                        player = session.player,
+                        camera = session.player.position,
+                        projection = IsometricProjection(zoom = 1f),
+                        palette = content.palette,
+                        biomeName = session.currentBiome.name,
+                        enemies = session.enemies,
+                        skills = session.skills,
+                        heldInserts = session.heldInserts,
+                        insertFor = session::insertOrNull,
+                        rarityColors = content::rarityColor,
+                        satchelOpen = true,
+                    ),
+                    world = session.world,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        composeTestRule.onRoot().captureRoboImage(filePath = "src/test/screenshots/satchel.png")
     }
 
     @Test

@@ -22,6 +22,7 @@ import com.stratum.engine.world.BuildTool
 import com.stratum.engine.world.DodgeResult
 import com.stratum.core.domain.sprite.AnimationPlayback
 import com.stratum.engine.world.FeedbackMark
+import com.stratum.engine.world.EquipResult
 import com.stratum.engine.world.GroundInsert
 import com.stratum.engine.world.GroundLoot
 import com.stratum.engine.world.HeldInsert
@@ -102,6 +103,28 @@ class PlayViewModel(
         // would drown out the messages that are not.
         is CombatEvent.PlayerHurt -> null
         is CombatEvent.InsertTaken -> "Picked up ${event.insert.name}"
+    }
+
+    // ---- the satchel -----------------------------------------------------
+
+    /** Opens or closes the bag. Like the anvil, it does not pause the world. */
+    fun toggleSatchel() {
+        _state.value = _state.value.copy(satchelOpen = !_state.value.satchelOpen)
+        publish()
+    }
+
+    fun equip(instanceId: String) {
+        publish(message = describe(session.equip(instanceId)))
+    }
+
+    fun discard(instanceId: String) {
+        publish(message = describe(session.discard(instanceId)))
+    }
+
+    private fun describe(result: EquipResult): String = when (result) {
+        is EquipResult.Equipped -> "Equipped ${result.item.name}"
+        is EquipResult.Discarded -> "Dropped ${result.item.name}"
+        EquipResult.NotInBag -> "That is not in your bag"
     }
 
     // ---- the anvil -------------------------------------------------------
@@ -392,6 +415,7 @@ data class PlayUiState(
      * the UI never holds a stale snapshot of the loaded packs. */
     val insertFor: (String) -> InsertDefinition? = { null },
     val rarityColors: (ItemRarity) -> Long = { DEFAULT_RARITY_TINT },
+    val satchelOpen: Boolean = false,
     val anvilOpen: Boolean = false,
     /** Which item the anvil is working on; falls back to what is equipped. */
     val anvilItemId: String? = null,

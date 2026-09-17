@@ -35,6 +35,7 @@ import com.stratum.core.designsystem.component.StratumDivider
 import com.stratum.core.designsystem.component.StratumPanel
 import com.stratum.core.designsystem.component.StratumWell
 import com.stratum.core.designsystem.theme.Space
+import com.stratum.core.designsystem.theme.safeContent
 import com.stratum.core.designsystem.theme.StratumTheme
 import com.stratum.core.domain.sprite.SpriteSheet
 
@@ -87,6 +88,7 @@ fun SpriteForgeContent(
         modifier = modifier
             .fillMaxSize()
             .background(colors.surface)
+            .safeContent()
             .verticalScroll(rememberScrollState())
             .padding(Space.large),
     ) {

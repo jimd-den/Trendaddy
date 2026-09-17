@@ -34,6 +34,9 @@ import com.stratum.core.designsystem.component.StratumPanel
 import com.stratum.core.designsystem.component.StratumProgressSliver
 import com.stratum.core.designsystem.theme.Cut
 import com.stratum.core.designsystem.theme.Space
+import com.stratum.core.designsystem.theme.safeBottomPadding
+import com.stratum.core.designsystem.theme.safeContent
+import com.stratum.core.designsystem.theme.safeTop
 import com.stratum.core.designsystem.theme.StratumTheme
 import com.stratum.core.domain.actor.SkillDefinition
 import com.stratum.engine.world.BuildTool
@@ -70,6 +73,9 @@ fun PlayScreen(
         onStopMining = viewModel::stopMining,
         onAttack = viewModel::attack,
         onCastSkill = viewModel::castSkill,
+        onToggleSatchel = viewModel::toggleSatchel,
+        onEquip = viewModel::equip,
+        onDiscard = viewModel::discard,
         onToggleAnvil = viewModel::toggleAnvil,
         onSelectAnvilItem = viewModel::selectAnvilItem,
         onSlotInsert = viewModel::slotInsert,
@@ -97,6 +103,9 @@ fun PlayScreenContent(
     onStopMining: () -> Unit = {},
     onAttack: () -> Unit = {},
     onCastSkill: (String) -> Unit = {},
+    onToggleSatchel: () -> Unit = {},
+    onEquip: (String) -> Unit = {},
+    onDiscard: (String) -> Unit = {},
     onToggleAnvil: () -> Unit = {},
     onSelectAnvilItem: (String) -> Unit = {},
     onSlotInsert: (String, String) -> Unit = { _, _ -> },
@@ -139,13 +148,15 @@ fun PlayScreenContent(
                 onLongPressBlock = onLongPressBlock,
             )
 
+            // The world draws under the status bar on purpose; the meters over
+            // it do not, or a camera hole lands in the middle of the health bar.
             VitalsOverlay(
                 state = state,
-                modifier = Modifier.align(Alignment.TopStart).padding(Space.medium),
+                modifier = Modifier.align(Alignment.TopStart).safeTop().padding(Space.medium),
             )
 
             Column(
-                modifier = Modifier.align(Alignment.TopEnd).padding(Space.medium),
+                modifier = Modifier.align(Alignment.TopEnd).safeTop().padding(Space.medium),
                 horizontalAlignment = Alignment.End,
             ) {
                 StratumAction(
@@ -154,13 +165,39 @@ fun PlayScreenContent(
                     emphasis = ActionEmphasis.SECONDARY,
                 )
                 Spacer(Modifier.height(Space.small))
-                StratumAction(
-                    label = if (state.heldInserts.isEmpty()) "Anvil" else "Anvil ${state.heldInserts.sumOf { it.count }}",
-                    onClick = onToggleAnvil,
-                    emphasis = if (state.anvilOpen) ActionEmphasis.PRIMARY else ActionEmphasis.SECONDARY,
-                )
+                // Paired rather than stacked: five controls down the right edge
+                // covers the part of the world the player is walking into.
+                Row(horizontalArrangement = Arrangement.spacedBy(Space.small)) {
+                    StratumAction(
+                        label = if (state.player.bag.isEmpty()) "Bag" else "Bag ${state.player.bag.size}",
+                        onClick = onToggleSatchel,
+                        emphasis = if (state.satchelOpen) ActionEmphasis.PRIMARY else ActionEmphasis.SECONDARY,
+                    )
+                    StratumAction(
+                        label = if (state.heldInserts.isEmpty()) "Anvil" else "Anvil ${state.heldInserts.sumOf { it.count }}",
+                        onClick = onToggleAnvil,
+                        emphasis = if (state.anvilOpen) ActionEmphasis.PRIMARY else ActionEmphasis.SECONDARY,
+                    )
+                }
                 Spacer(Modifier.height(Space.small))
                 ZoomControls(onZoom = onZoom)
+            }
+
+            if (state.satchelOpen && !state.anvilOpen && !state.isDead) {
+                SatchelOverlay(
+                    state = state,
+                    world = world,
+                    onEquip = onEquip,
+                    onDiscard = onDiscard,
+                    // The two panels are one errand: read the item here, socket
+                    // it next door, without going back out to the world first.
+                    onOpenAnvil = {
+                        onToggleSatchel()
+                        onToggleAnvil()
+                    },
+                    onClose = onToggleSatchel,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
 
             if (state.anvilOpen && !state.isDead) {
@@ -181,7 +218,10 @@ fun PlayScreenContent(
                         .background(colors.surface.copy(alpha = 0.82f)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(
+                        modifier = Modifier.safeContent(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
                         Text(
                             text = "YOU HAVE FALLEN",
                             style = MaterialTheme.typography.headlineMedium,
@@ -316,10 +356,12 @@ private fun ControlBand(
 ) {
     val colors = StratumTheme.colors
 
+    // The panel itself runs to the screen edge so its surface sits behind the
+    // gesture bar; only what is inside it moves up out of the way.
     StratumPanel(
         modifier = modifier.fillMaxWidth(),
         shape = Cut.large,
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(Space.large),
+        contentPadding = safeBottomPadding(Space.large),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),

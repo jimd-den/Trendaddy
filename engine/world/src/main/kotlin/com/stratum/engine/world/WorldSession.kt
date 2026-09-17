@@ -746,6 +746,40 @@ class WorldSession(
         groundInserts = groundInserts + GroundInsert(insertId, position)
     }
 
+    // ---- the satchel -----------------------------------------------------
+
+    /**
+     * Equips something from the bag. What was held goes back into the bag
+     * rather than being destroyed, so a swap is always reversible and a player
+     * can carry a mining weapon and a fighting one.
+     */
+    fun equip(instanceId: String): EquipResult {
+        val item = player.bag.firstOrNull { it.instanceId == instanceId }
+            ?: return EquipResult.NotInBag
+        val previous = player.equippedWeapon
+        player = player.equipping(item)
+        // Inserts can carry health, so the ceiling moves on a swap; clamp rather
+        // than leaving the player reading more health than they have.
+        player = player.copy(health = player.health.coerceAtMost(player.maxHealthWith(::insertOrNull)))
+        return EquipResult.Equipped(item, previous)
+    }
+
+    /**
+     * Drops an item out of the bag onto the ground at the player's feet.
+     *
+     * It lands rather than vanishing: the pickup radius means the player can
+     * change their mind, and a bag with no way out fills up and stops being a
+     * bag at all.
+     */
+    fun discard(instanceId: String): EquipResult {
+        val item = player.bag.firstOrNull { it.instanceId == instanceId }
+            ?: return EquipResult.NotInBag
+        player = player.copy(bag = player.bag - item)
+        // Dropped a step away, or the player picks it straight back up.
+        groundLoot = groundLoot + GroundLoot(item, player.position.translated(DISCARD_STEP, 0f, 0f))
+        return EquipResult.Discarded(item)
+    }
+
     // ---- the anvil -------------------------------------------------------
 
     /** Resolves an insert id against the loaded packs. */
@@ -1003,6 +1037,8 @@ class WorldSession(
         const val BASE_DROP_CHANCE = 0.35f
         /** Rolled separately from gear, so a socket always has something to fill it. */
         const val INSERT_DROP_CHANCE = 0.22f
+        /** Far enough that a discard is not undone by the next tick. */
+        const val DISCARD_STEP = 2f
         const val DEFAULT_DAMAGE_TYPE = "stratum:physical"
 
         /** Blocks per second at full stick deflection. */
@@ -1092,6 +1128,13 @@ data class GroundInsert(val insertId: String, val position: WorldPoint)
 
 /** An insert in the pouch, with how many of it the player holds. */
 data class HeldInsert(val definition: InsertDefinition, val count: Int)
+
+/** What changing gear did. */
+sealed interface EquipResult {
+    data class Equipped(val item: ItemInstance, val replaced: ItemInstance?) : EquipResult
+    data class Discarded(val item: ItemInstance) : EquipResult
+    data object NotInBag : EquipResult
+}
 
 /** What a trip to the anvil did. */
 sealed interface SocketResult {

@@ -33,6 +33,7 @@ import com.stratum.core.designsystem.component.StratumPanel
 import com.stratum.core.designsystem.component.StratumSection
 import com.stratum.core.designsystem.component.StratumWell
 import com.stratum.core.designsystem.theme.Space
+import com.stratum.core.designsystem.theme.safeContent
 import com.stratum.core.designsystem.theme.StratumTheme
 import com.stratum.feature.play.PlayScreen
 import com.stratum.core.domain.content.ContentPack
@@ -213,6 +214,9 @@ private fun HomeScreen(
         modifier = modifier
             .fillMaxSize()
             .background(colors.surface)
+            // Inset before the scroll, so the content scrolls under nothing and
+            // the first line is never behind the status bar on a tall phone.
+            .safeContent()
             .verticalScroll(rememberScrollState())
             .padding(Space.large),
     ) {

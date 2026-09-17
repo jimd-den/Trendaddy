@@ -27,6 +27,7 @@ import com.stratum.core.designsystem.component.SectionLabel
 import com.stratum.core.designsystem.component.StratumAction
 import com.stratum.core.designsystem.component.StratumPanel
 import com.stratum.core.designsystem.theme.Space
+import com.stratum.core.designsystem.theme.safeContent
 import com.stratum.core.designsystem.theme.StratumTheme
 
 /**
@@ -53,6 +54,7 @@ fun ProviderSettingsScreen(
         modifier = modifier
             .fillMaxSize()
             .background(colors.surface)
+            .safeContent()
             .verticalScroll(rememberScrollState())
             .padding(Space.large),
     ) {
