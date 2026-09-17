@@ -28,6 +28,7 @@ import com.stratum.core.designsystem.component.ActionEmphasis
 import com.stratum.core.designsystem.component.SectionLabel
 import com.stratum.core.designsystem.component.StratumAction
 import com.stratum.core.designsystem.component.StratumChip
+import com.stratum.core.designsystem.component.StratumJoystick
 import com.stratum.core.designsystem.component.StratumMeter
 import com.stratum.core.designsystem.component.StratumPanel
 import com.stratum.core.designsystem.component.StratumProgressSliver
@@ -57,7 +58,8 @@ fun PlayScreen(
         modifier = modifier,
         onTapBlock = viewModel::beginMining,
         onLongPressBlock = viewModel::place,
-        onMove = viewModel::move,
+        onMoveInput = viewModel::setMoveInput,
+        onDodge = viewModel::dodge,
         onSelectSlot = viewModel::selectSlot,
         onZoom = viewModel::zoom,
         onStopMining = viewModel::stopMining,
@@ -75,7 +77,8 @@ fun PlayScreenContent(
     modifier: Modifier = Modifier,
     onTapBlock: (com.stratum.core.domain.world.BlockPos) -> Unit = {},
     onLongPressBlock: (com.stratum.core.domain.world.BlockPos) -> Unit = {},
-    onMove: (Float, Float) -> Unit = { _, _ -> },
+    onMoveInput: (Float, Float) -> Unit = { _, _ -> },
+    onDodge: () -> Unit = {},
     onSelectSlot: (Int) -> Unit = {},
     onZoom: (Float) -> Unit = {},
     onStopMining: () -> Unit = {},
@@ -172,7 +175,8 @@ fun PlayScreenContent(
         ControlBand(
             state = state,
             world = world,
-            onMove = onMove,
+            onMoveInput = onMoveInput,
+            onDodge = onDodge,
             onSelectSlot = onSelectSlot,
             onStopMining = onStopMining,
             onAttack = onAttack,
@@ -249,7 +253,8 @@ private fun ZoomControls(onZoom: (Float) -> Unit, modifier: Modifier = Modifier)
 private fun ControlBand(
     state: PlayUiState,
     world: World,
-    onMove: (Float, Float) -> Unit,
+    onMoveInput: (Float, Float) -> Unit,
+    onDodge: () -> Unit,
     onSelectSlot: (Int) -> Unit,
     onStopMining: () -> Unit,
     onAttack: () -> Unit,
@@ -283,7 +288,14 @@ private fun ControlBand(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            MovementPad(onMove = onMove, onStop = onStopMining)
+            StratumJoystick(
+                onDirection = { x, y ->
+                    // Any stick movement cancels a dig: walking away from a
+                    // block you were mining should not keep mining it.
+                    if (x != 0f || y != 0f) onStopMining()
+                    onMoveInput(x, y)
+                },
+            )
 
             Column(horizontalAlignment = Alignment.End) {
                 Text(
@@ -292,10 +304,23 @@ private fun ControlBand(
                     color = colors.inkMuted,
                 )
                 Spacer(Modifier.height(Space.small))
-                StratumAction(
-                    label = "Strike",
-                    onClick = onAttack,
-                    emphasis = ActionEmphasis.DESTRUCTIVE,
+                Row(horizontalArrangement = Arrangement.spacedBy(Space.small)) {
+                    StratumAction(
+                        label = if (state.rollCooldownFraction > 0f) "Roll…" else "Roll",
+                        onClick = onDodge,
+                        emphasis = ActionEmphasis.SECONDARY,
+                        enabled = state.rollCooldownFraction <= 0f,
+                    )
+                    StratumAction(
+                        label = "Strike",
+                        onClick = onAttack,
+                        emphasis = ActionEmphasis.DESTRUCTIVE,
+                    )
+                }
+                Spacer(Modifier.height(Space.hair))
+                StratumProgressSliver(
+                    fraction = 1f - state.rollCooldownFraction,
+                    tint = colors.accentAlt,
                 )
                 Spacer(Modifier.height(Space.small))
                 Hotbar(state = state, world = world, onSelectSlot = onSelectSlot)
@@ -345,33 +370,6 @@ private fun SkillBar(
 }
 
 @Composable
-private fun MovementPad(
-    onMove: (Float, Float) -> Unit,
-    onStop: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    // The pad is aligned to the isometric axes, not the screen axes: pressing
-    // "up" walks toward the top of the screen, which is north-west in world
-    // space. Anything else feels broken in an isometric game.
-    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        PadButton("▲") { onStop(); onMove(-STEP, -STEP) }
-        Row {
-            PadButton("◀") { onStop(); onMove(-STEP, STEP) }
-            Spacer(Modifier.width(44.dp))
-            PadButton("▶") { onStop(); onMove(STEP, -STEP) }
-        }
-        PadButton("▼") { onStop(); onMove(STEP, STEP) }
-    }
-}
-
-@Composable
-private fun PadButton(glyph: String, onClick: () -> Unit) {
-    Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-        StratumAction(label = glyph, onClick = onClick, emphasis = ActionEmphasis.SECONDARY)
-    }
-}
-
-@Composable
 private fun Hotbar(
     state: PlayUiState,
     world: World,
@@ -404,5 +402,4 @@ private fun Hotbar(
     }
 }
 
-private const val STEP = 1f
 private const val ZOOM_STEP = 0.2f

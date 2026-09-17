@@ -173,9 +173,15 @@ class LayeredTerrainGenerator(
     }
 
     private companion object {
-        const val TERRAIN_SCALE = 0.035f
-        /** Widens the noise's usable range without making cliffs unwalkable. */
-        const val TERRAIN_GAIN = 2.2f
+        const val TERRAIN_SCALE = 0.018f
+        /**
+         * Widens the noise's usable range. Kept low deliberately: this is a
+         * game about putting buildings on the ground, and a landscape of
+         * one-block steps is both hard to walk and impossible to build on.
+         * Relief comes from biome height bias and roughness instead, which
+         * varies between regions rather than between adjacent columns.
+         */
+        const val TERRAIN_GAIN = 1.15f
         const val BIOME_SCALE = 0.008f
         const val CAVE_SCALE = 0.12f
         const val CAVE_SCALE_Z = 0.22f

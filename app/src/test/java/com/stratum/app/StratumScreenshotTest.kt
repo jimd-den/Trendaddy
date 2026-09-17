@@ -54,6 +54,9 @@ class StratumScreenshotTest {
         // Run the world forward so the shot shows a live fight rather than an
         // empty field: monsters spawn, close in, and chip the player's health.
         repeat(40) { session.tick(0.25f) }
+        session.setMoveInput(1f, -0.4f)
+        session.dodge()
+        session.tick(0.05f)
         val slain = content.enemies.first()
         session.dropLoot(
             com.stratum.engine.world.LootRoller(content.weapons, content.affixes)
@@ -79,6 +82,9 @@ class StratumScreenshotTest {
                         enemies = session.enemies,
                         groundLoot = session.groundLoot,
                         skills = session.skills,
+                        isRolling = session.isRolling,
+                        isInvulnerable = session.isInvulnerable,
+                        rollCooldownFraction = session.rollCooldownFraction,
                     ),
                     world = session.world,
                     modifier = Modifier.fillMaxSize(),

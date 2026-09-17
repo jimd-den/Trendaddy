@@ -14,12 +14,18 @@ import kotlin.math.floor
  * matters for sprite art that must not shimmer when the camera moves.
  */
 data class IsometricProjection(
-    /** Screen width of one block's top face. */
-    val tileWidth: Float = 64f,
+    /**
+     * Screen width of one block's top face.
+     *
+     * Sized so a phone shows roughly a dozen blocks across rather than thirty.
+     * At the old scale the character was a speck and the terrain read as
+     * texture; this is close enough to see what you are fighting.
+     */
+    val tileWidth: Float = 96f,
     /** Screen height of one block's top face; half the width gives the 2:1 look. */
-    val tileHeight: Float = 32f,
+    val tileHeight: Float = 48f,
     /** Screen height gained per z level. */
-    val blockHeight: Float = 32f,
+    val blockHeight: Float = 48f,
     val zoom: Float = 1f,
 ) {
     private val halfWidth get() = tileWidth * zoom / 2f

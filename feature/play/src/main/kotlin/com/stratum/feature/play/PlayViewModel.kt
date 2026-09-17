@@ -14,6 +14,7 @@ import com.stratum.core.domain.world.WorldPoint
 import com.stratum.engine.world.IsometricProjection
 import com.stratum.engine.world.AttackReport
 import com.stratum.engine.world.CombatEvent
+import com.stratum.engine.world.DodgeResult
 import com.stratum.engine.world.GroundLoot
 import com.stratum.engine.world.MineResult
 import com.stratum.engine.world.PlaceRejection
@@ -78,6 +79,9 @@ class PlayViewModel(
         is CombatEvent.LootTaken ->
             if (event.equipped) "Equipped ${event.item.name}" else "Picked up ${event.item.name}"
         is CombatEvent.PlayerDied -> "You have fallen"
+        // A dodge is the one defensive moment worth naming: it is the player
+        // getting something right, and it is invisible otherwise.
+        is CombatEvent.PlayerDodged -> "Dodged"
         // Taking a hit is already visible on the health meter; saying so as well
         // would drown out the messages that are not.
         is CombatEvent.PlayerHurt -> null
@@ -91,9 +95,25 @@ class PlayViewModel(
         biomeName = session.currentBiome.name,
     )
 
+    /**
+     * The joystick reports where the thumb is, every frame it moves. The session
+     * integrates it on its own clock, so this only records intent.
+     */
+    fun setMoveInput(dx: Float, dy: Float) {
+        session.setMoveInput(dx, dy)
+    }
+
+    /** Single nudge, for anything that is not the stick. */
     fun move(dx: Float, dy: Float) {
         session.move(dx, dy)
         publish()
+    }
+
+    fun dodge() {
+        when (session.dodge()) {
+            DodgeResult.Rolling -> publish()
+            DodgeResult.OnCooldown, DodgeResult.AlreadyRolling, DodgeResult.Rejected -> Unit
+        }
     }
 
     fun selectSlot(slot: Int) {
@@ -193,6 +213,9 @@ class PlayViewModel(
             worldRevision = snapshot.worldRevision,
             enemies = snapshot.enemies,
             groundLoot = snapshot.groundLoot,
+            isRolling = snapshot.isRolling,
+            isInvulnerable = snapshot.isInvulnerable,
+            rollCooldownFraction = snapshot.rollCooldownFraction,
             skills = snapshot.skills,
             frame = _state.value.frame + 1,
             message = message ?: _state.value.message,
@@ -256,6 +279,9 @@ data class PlayUiState(
     val worldRevision: Int = 0,
     val enemies: List<EnemyInstance> = emptyList(),
     val groundLoot: List<GroundLoot> = emptyList(),
+    val isRolling: Boolean = false,
+    val isInvulnerable: Boolean = false,
+    val rollCooldownFraction: Float = 0f,
     val skills: List<SkillDefinition> = emptyList(),
     /** Advances every tick so the canvas redraws while the fight is moving. */
     val frame: Int = 0,

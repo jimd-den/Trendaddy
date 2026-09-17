@@ -36,7 +36,7 @@ internal object IgboPackBiomes {
         subsurfaceBlockId = IgboPackBlocks.redEarth.id,
         bedrockFillerBlockId = IgboPackBlocks.graniteStone.id,
         heightBias = 1,
-        roughness = 0.8f,
+        roughness = 0.7f,
         scatter = listOf(
             ScatterRule(IgboPackBlocks.irokoTrunk.id, chance = 0.055f, height = 4),
             ScatterRule(IgboPackBlocks.palmReed.id, chance = 0.09f, height = 1),
@@ -52,8 +52,8 @@ internal object IgboPackBiomes {
         surfaceBlockId = IgboPackBlocks.redEarth.id,
         subsurfaceBlockId = IgboPackBlocks.redEarth.id,
         bedrockFillerBlockId = IgboPackBlocks.catacombMasonry.id,
-        heightBias = 3,
-        roughness = 0.45f,
+        heightBias = 2,
+        roughness = 0.25f,
         scatter = listOf(
             ScatterRule(IgboPackBlocks.nsibidiSeal.id, chance = 0.012f, height = 1),
         ),
@@ -68,8 +68,8 @@ internal object IgboPackBiomes {
         surfaceBlockId = IgboPackBlocks.obsidianCrag.id,
         subsurfaceBlockId = IgboPackBlocks.ashSand.id,
         bedrockFillerBlockId = IgboPackBlocks.graniteStone.id,
-        heightBias = 9,
-        roughness = 1.9f,
+        heightBias = 6,
+        roughness = 1.5f,
         scatter = emptyList(),
         deposits = listOf(
             DepositRule(IgboPackBlocks.stormCrystal.id, minZ = 6, maxZ = 20, chance = 0.07f, clusterSize = 2),
@@ -85,8 +85,8 @@ internal object IgboPackBiomes {
         surfaceBlockId = IgboPackBlocks.catacombMasonry.id,
         subsurfaceBlockId = IgboPackBlocks.catacombMasonry.id,
         bedrockFillerBlockId = IgboPackBlocks.graniteStone.id,
-        heightBias = -4,
-        roughness = 0.6f,
+        heightBias = -3,
+        roughness = 0.5f,
         scatter = listOf(
             ScatterRule(IgboPackBlocks.bronzeBrazier.id, chance = 0.02f, height = 1),
         ),
@@ -101,8 +101,8 @@ internal object IgboPackBiomes {
         surfaceBlockId = IgboPackBlocks.riverClay.id,
         subsurfaceBlockId = IgboPackBlocks.riverClay.id,
         bedrockFillerBlockId = IgboPackBlocks.graniteStone.id,
-        heightBias = -3,
-        roughness = 0.35f,
+        heightBias = -2,
+        roughness = 0.2f,
         scatter = listOf(
             ScatterRule(IgboPackBlocks.palmReed.id, chance = 0.14f, height = 1),
             ScatterRule(IgboPackBlocks.irokoTrunk.id, chance = 0.02f, height = 3),

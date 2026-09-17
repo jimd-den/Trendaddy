@@ -17,6 +17,7 @@ import com.stratum.core.domain.world.WorldConfig
 import com.stratum.core.domain.world.WorldPoint
 import kotlin.math.abs
 import kotlin.math.floor
+import kotlin.math.sqrt
 import kotlin.random.Random
 
 /**
@@ -114,41 +115,125 @@ class WorldSession(
     // ---- movement --------------------------------------------------------
 
     /**
-     * Moves the player horizontally, resolving terrain as it goes.
+     * The direction the player is being pushed, from the joystick. Length 0..1,
+     * so a half-deflected stick walks at half speed.
      *
-     * A step up of one block is climbed automatically, since requiring a jump
-     * for every furrow in the terrain makes an isometric world miserable to walk.
-     * Anything taller blocks, and unsupported ground drops the player.
+     * Held as intent rather than applied immediately: movement is integrated in
+     * [tick] so that speed is measured in blocks per second and does not depend
+     * on how often the UI happens to call in.
      */
-    fun move(dx: Float, dy: Float): MoveOutcome {
-        if (dx == 0f && dy == 0f) return MoveOutcome(player, moved = false, blocked = false)
+    private var moveInput: WorldPoint = WorldPoint.ZERO
 
-        val facing = facingFor(dx, dy)
-        val target = player.position.translated(dx, dy, 0f)
-        val targetColumn = BlockPos(floor(target.x).toInt(), floor(target.y).toInt(), player.blockPos.z)
+    /** Seconds left of the current dodge roll, and the direction it is going. */
+    private var rollRemaining: Float = 0f
+    private var rollDirection: WorldPoint = WorldPoint.ZERO
 
-        val resolved = resolveStandingPosition(targetColumn, target)
-        if (resolved == null) {
-            player = player.copy(facing = facing)
-            return MoveOutcome(player, moved = false, blocked = true)
+    /** Seconds left of invulnerability. Longer than nothing, shorter than the roll. */
+    private var invulnerableFor: Float = 0f
+
+    /** Seconds until another roll is allowed. */
+    private var rollCooldown: Float = 0f
+
+    val isRolling: Boolean get() = rollRemaining > 0f
+
+    val isInvulnerable: Boolean get() = invulnerableFor > 0f
+
+    val rollCooldownFraction: Float
+        get() = (rollCooldown / ROLL_COOLDOWN).coerceIn(0f, 1f)
+
+    /**
+     * Sets the direction the player wants to go, as a vector from the joystick.
+     * Zero stops them.
+     */
+    fun setMoveInput(dx: Float, dy: Float) {
+        val length = sqrt(dx * dx + dy * dy)
+        moveInput = if (length <= INPUT_DEADZONE) {
+            WorldPoint.ZERO
+        } else {
+            // Clamp to the unit circle so a diagonal is not faster than a
+            // cardinal, which is the classic bug with square joystick input.
+            val scale = (if (length > 1f) 1f / length else 1f)
+            WorldPoint(dx * scale, dy * scale, 0f)
         }
-
-        player = player.copy(position = resolved, facing = facing)
-        streamingWorld.focusOn(player.blockPos)
-        return MoveOutcome(player, moved = true, blocked = false)
+        if (moveInput != WorldPoint.ZERO) {
+            player = player.copy(facing = facingFor(moveInput.x, moveInput.y))
+        }
     }
 
     /**
-     * Where the player ends up in the target column, or null if the way is blocked.
-     * Climbs at most [STEP_UP] and falls any distance.
+     * Starts a dodge roll: a burst of speed in the current direction with a
+     * window of invulnerability.
      *
-     * The player stands on top of the highest solid block at or below the reach
-     * of a step. Searching downward from there and stopping at the first solid
-     * block is what stops a walk from tunnelling through a wall into whatever
-     * cavity lies behind it.
+     * Rolls in the facing direction when the stick is neutral, so a dodge is
+     * always available rather than requiring the player to be already moving.
      */
-    private fun resolveStandingPosition(column: BlockPos, target: WorldPoint): WorldPoint? {
-        val currentZ = player.blockPos.z
+    fun dodge(): DodgeResult {
+        // Most specific reason first: a roll always sets the cooldown, so
+        // checking cooldown first would report every mid-roll press as
+        // "on cooldown" and hide what is actually happening.
+        if (!player.isAlive) return DodgeResult.Rejected
+        if (isRolling) return DodgeResult.AlreadyRolling
+        if (rollCooldown > 0f) return DodgeResult.OnCooldown
+
+        val direction = if (moveInput == WorldPoint.ZERO) {
+            WorldPoint(player.facing.dx.toFloat(), player.facing.dy.toFloat(), 0f)
+        } else {
+            moveInput
+        }
+
+        rollDirection = direction
+        rollRemaining = ROLL_DURATION
+        invulnerableFor = ROLL_INVULNERABILITY
+        rollCooldown = ROLL_COOLDOWN
+        return DodgeResult.Rolling
+    }
+
+    /**
+     * Integrates movement for one frame.
+     *
+     * Axes are resolved separately so that walking into a wall at an angle
+     * slides along it instead of stopping dead. Sticking on geometry is the
+     * single most felt movement bug in an isometric game, because the player
+     * cannot see the wall they are caught on.
+     */
+    private fun advanceMovement(deltaSeconds: Float) {
+        rollCooldown = (rollCooldown - deltaSeconds).coerceAtLeast(0f)
+        invulnerableFor = (invulnerableFor - deltaSeconds).coerceAtLeast(0f)
+
+        val velocity: WorldPoint
+        if (rollRemaining > 0f) {
+            rollRemaining = (rollRemaining - deltaSeconds).coerceAtLeast(0f)
+            velocity = WorldPoint(rollDirection.x * ROLL_SPEED, rollDirection.y * ROLL_SPEED, 0f)
+        } else if (moveInput != WorldPoint.ZERO) {
+            velocity = WorldPoint(moveInput.x * WALK_SPEED, moveInput.y * WALK_SPEED, 0f)
+        } else {
+            settlePlayer()
+            return
+        }
+
+        val stepX = velocity.x * deltaSeconds
+        val stepY = velocity.y * deltaSeconds
+
+        var position = player.position
+        position = tryAxis(position, stepX, 0f) ?: position
+        position = tryAxis(position, 0f, stepY) ?: position
+
+        player = player.copy(position = position)
+        streamingWorld.focusOn(player.blockPos)
+        settlePlayer()
+    }
+
+    /**
+     * Attempts one axis of movement, returning the new position or null when
+     * the way is blocked. Climbing a single step is free; anything taller is a
+     * wall.
+     */
+    private fun tryAxis(from: WorldPoint, dx: Float, dy: Float): WorldPoint? {
+        if (dx == 0f && dy == 0f) return from
+
+        val target = from.translated(dx, dy, 0f)
+        val column = BlockPos(floor(target.x).toInt(), floor(target.y).toInt(), 0)
+        val currentZ = from.toBlockPos().z
 
         var highestSolid = -1
         for (z in (currentZ + STEP_UP) downTo 0) {
@@ -159,10 +244,34 @@ class WorldSession(
         }
 
         val standingZ = highestSolid + 1
-        // Anything taller than a single step is a wall. Falls are unrestricted.
         if (standingZ - currentZ > STEP_UP) return null
         if (standingZ >= Chunk.HEIGHT) return null
         return WorldPoint(target.x, target.y, standingZ.toFloat())
+    }
+
+    /**
+     * Single-shot movement, kept for tests and for anything that wants to nudge
+     * the player a fixed distance rather than hold a direction.
+     */
+    fun move(dx: Float, dy: Float): MoveOutcome {
+        if (dx == 0f && dy == 0f) return MoveOutcome(player, moved = false, blocked = false)
+
+        val facing = facingFor(dx, dy)
+        player = player.copy(facing = facing)
+
+        var position = player.position
+        val afterX = tryAxis(position, dx, 0f)
+        val afterY = tryAxis(afterX ?: position, 0f, dy)
+        val resolved = afterY ?: afterX
+
+        if (resolved == null || resolved == player.position) {
+            return MoveOutcome(player, moved = false, blocked = true)
+        }
+
+        player = player.copy(position = resolved)
+        streamingWorld.focusOn(player.blockPos)
+        settlePlayer()
+        return MoveOutcome(player, moved = true, blocked = false)
     }
 
     private fun facingFor(dx: Float, dy: Float): Direction = when {
@@ -281,6 +390,10 @@ class WorldSession(
 
         val produced = mutableListOf<CombatEvent>()
 
+        // Movement first: a roll should be able to carry the player out of
+        // reach before the monsters around them take their swing.
+        advanceMovement(deltaSeconds)
+
         if (content.enemies.isNotEmpty()) {
             enemies = director.maintainPopulation(
                 current = enemies,
@@ -299,9 +412,15 @@ class WorldSession(
             )
             enemies = incoming.enemies
             if (incoming.totalDamage > 0) {
-                player = player.damaged(incoming.totalDamage)
-                produced += CombatEvent.PlayerHurt(incoming.totalDamage, incoming.results)
-                if (!player.isAlive) produced += CombatEvent.PlayerDied
+                if (isInvulnerable) {
+                    // The swing happened and went on cooldown; it simply did not
+                    // land. Reporting it is what makes a well-timed roll legible.
+                    produced += CombatEvent.PlayerDodged(incoming.totalDamage)
+                } else {
+                    player = player.damaged(incoming.totalDamage)
+                    produced += CombatEvent.PlayerHurt(incoming.totalDamage, incoming.results)
+                    if (!player.isAlive) produced += CombatEvent.PlayerDied
+                }
             }
         }
 
@@ -477,6 +596,9 @@ class WorldSession(
         biome = currentBiome,
         miningTarget = miningTarget,
         miningFraction = miningFraction,
+        isRolling = isRolling,
+        isInvulnerable = isInvulnerable,
+        rollCooldownFraction = rollCooldownFraction,
         worldRevision = streamingWorld.loadedChunks.sumOf { it.revision },
         enemies = enemies,
         groundLoot = groundLoot,
@@ -490,11 +612,32 @@ class WorldSession(
         const val PICKUP_RADIUS = 1.6f
         const val BASE_DROP_CHANCE = 0.35f
         const val DEFAULT_DAMAGE_TYPE = "stratum:physical"
+
+        /** Blocks per second at full stick deflection. */
+        const val WALK_SPEED = 4.2f
+        /** A roll is a burst, not a sprint: fast and over quickly. */
+        const val ROLL_SPEED = 11f
+        const val ROLL_DURATION = 0.28f
+        /**
+         * Shorter than the roll, so the end of a roll is vulnerable. Rolling
+         * through an attack has to be timed rather than held.
+         */
+        const val ROLL_INVULNERABILITY = 0.2f
+        const val ROLL_COOLDOWN = 1.1f
+        /** Below this the stick is treated as centred. */
+        const val INPUT_DEADZONE = 0.12f
         private val SPAWN_CHUNK = com.stratum.core.domain.world.ChunkPos(0, 0)
     }
 }
 
 data class MoveOutcome(val player: PlayerState, val moved: Boolean, val blocked: Boolean)
+
+sealed interface DodgeResult {
+    data object Rolling : DodgeResult
+    data object OnCooldown : DodgeResult
+    data object AlreadyRolling : DodgeResult
+    data object Rejected : DodgeResult
+}
 
 data class SessionSnapshot(
     val player: PlayerState,
@@ -502,6 +645,9 @@ data class SessionSnapshot(
     val biome: BiomeDefinition,
     val miningTarget: BlockPos?,
     val miningFraction: Float,
+    val isRolling: Boolean = false,
+    val isInvulnerable: Boolean = false,
+    val rollCooldownFraction: Float = 0f,
     /** Changes when any loaded chunk changes, so the renderer knows to redraw. */
     val worldRevision: Int,
     val enemies: List<EnemyInstance> = emptyList(),
@@ -532,6 +678,9 @@ sealed interface AttackReport {
 /** Something worth showing the player. Produced per tick and not retained. */
 sealed interface CombatEvent {
     data class PlayerHurt(val amount: Int, val results: List<DamageResult>) : CombatEvent
+
+    /** An attack that would have landed but did not, because of a roll. */
+    data class PlayerDodged(val amountAvoided: Int) : CombatEvent
     data class LootTaken(val item: ItemInstance, val equipped: Boolean) : CombatEvent
     data object PlayerDied : CombatEvent
 }
