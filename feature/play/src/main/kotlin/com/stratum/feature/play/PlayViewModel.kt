@@ -392,6 +392,9 @@ class PlayViewModel(
     }
 
     fun place(target: BlockPos) {
+        // The session stops its own mining, but the coroutine driving it lives
+        // here and would otherwise keep calling mine() on the old target.
+        miningJob?.cancel()
         when (val result = session.place(target)) {
             is PlaceResult.Placed -> publish(message = "Placed ${result.block.displayName}")
             is PlaceResult.Rejected -> publish(message = placeRejectionMessage(result.reason))

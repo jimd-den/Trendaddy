@@ -367,10 +367,25 @@ class WorldSession(
             return if (hardness <= 0f) 0f else (miningProgress / hardness).coerceIn(0f, 1f)
         }
 
-    /** Places the selected hotbar block, spending one from the inventory. */
-    fun place(target: BlockPos): PlaceResult {
+    /**
+     * Places the selected hotbar block against the block the player touched,
+     * spending one from the inventory.
+     *
+     * [picked] is a solid block — the only thing a tap can resolve to — so the
+     * cell to fill is the face next to it, not the block itself.
+     */
+    fun place(picked: BlockPos): PlaceResult {
         val blockId = player.selectedBlockId
             ?: return PlaceResult.Rejected(PlaceRejection.UNKNOWN_BLOCK)
+
+        // Building and digging share a surface. Placing without stopping the dig
+        // means the block you were mining keeps breaking while you build, which
+        // reads as "placing removes blocks".
+        cancelMining()
+
+        val target = interaction.placementCellFor(picked, player.blockPos, actorCells())
+            ?: return PlaceResult.Rejected(PlaceRejection.OCCUPIED)
+
         val spent = player.consuming(blockId)
             ?: return PlaceResult.Rejected(PlaceRejection.UNKNOWN_BLOCK)
 
@@ -387,6 +402,25 @@ class WorldSession(
         }
         return result
     }
+
+    /** Where a tap on [picked] would actually put a block, for the ghost preview. */
+    fun placementPreviewFor(picked: BlockPos): BlockPos? =
+        interaction.placementCellFor(picked, player.blockPos, actorCells())
+
+    /**
+     * Cells a body is standing in. Tapping the ground at your feet should build
+     * beside you rather than refuse, so these are skipped while resolving the
+     * cell rather than rejected after one has been chosen.
+     */
+    private fun actorCells(): Set<BlockPos> =
+        buildSet {
+            add(player.feet)
+            add(player.feet.above())
+            enemies.forEach {
+                add(it.blockPos)
+                add(it.blockPos.above())
+            }
+        }
 
     fun selectSlot(slot: Int) {
         player = player.selectingSlot(slot)
