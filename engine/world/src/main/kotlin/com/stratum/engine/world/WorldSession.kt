@@ -6,6 +6,7 @@ import com.stratum.core.domain.actor.Progression
 import com.stratum.core.domain.actor.SkillDefinition
 import com.stratum.core.domain.combat.DamageResult
 import com.stratum.core.domain.content.BiomeDefinition
+import com.stratum.core.domain.item.InsertDefinition
 import com.stratum.core.domain.item.ItemInstance
 import com.stratum.core.domain.item.ItemRarity
 import com.stratum.core.domain.session.PlayerState
@@ -68,7 +69,7 @@ class WorldSession(
 
     /** How lit an actor is from a recent hit, 0..1. */
     fun flashFor(actorId: String): Float = hitFlashes.intensity(actorId)
-    private val lootRoller = LootRoller(content.weapons, content.affixes)
+    private val lootRoller = LootRoller(content.weapons, content.affixes, content.inserts)
     private val director = EnemyDirector(streamingWorld, content.enemies)
 
     val world: World get() = streamingWorld
@@ -93,6 +94,11 @@ class WorldSession(
 
     /** Loot lying on the ground, waiting to be walked over. */
     var groundLoot: List<GroundLoot> = emptyList()
+        internal set
+
+    /** Inserts lying on the ground. Separate from [groundLoot] because they
+     * stack into a pouch rather than becoming items in their own right. */
+    var groundInserts: List<GroundInsert> = emptyList()
         internal set
 
     /** Events produced by the last tick, for the UI to draw and then forget. */
@@ -434,7 +440,7 @@ class WorldSession(
 
             val incoming = combat.enemyAttacks(
                 enemies = enemies,
-                defender = player.combatStats,
+                defender = playerStats,
                 defenderPosition = player.position,
                 cooldownFor = { it.stats.secondsBetweenAttacks },
                 random = random,
@@ -482,6 +488,7 @@ class WorldSession(
         }
 
         produced += collectLoot()
+        produced += collectInserts()
         advanceAnimations(deltaSeconds)
 
         player = player.copy(
@@ -496,13 +503,14 @@ class WorldSession(
     /** A basic swing. Refused while the weapon is still recovering. */
     fun attack(): AttackReport {
         if (player.attackCooldown > 0f) return AttackReport.NotReady
-        val stats = player.combatStats
+        val stats = playerStats
         val outcome = combat.playerAttack(
             attacker = stats,
             attackerPosition = player.position,
             facing = player.facing,
             enemies = enemies,
-            damageTypeId = player.equippedWeapon?.damageTypeId ?: DEFAULT_DAMAGE_TYPE,
+            damageTypeId = player.equippedWeapon?.damageTypeWithSockets(::insertOrNull)
+                ?: DEFAULT_DAMAGE_TYPE,
             random = random,
         )
         player = player.copy(attackCooldown = stats.secondsBetweenAttacks)
@@ -517,7 +525,7 @@ class WorldSession(
         if (player.resource < skill.resourceCost) return AttackReport.NotEnoughResource
 
         val outcome = combat.castSkill(
-            attacker = player.combatStats,
+            attacker = playerStats,
             attackerPosition = player.position,
             facing = player.facing,
             enemies = enemies,
@@ -589,6 +597,7 @@ class WorldSession(
             slain.forEach { enemy ->
                 hitFlashes.forget(enemy.instanceId)
                 dropLootFor(enemy)
+                dropInsertFor(enemy)
             }
             awardExperience(slain.sumOf { it.experience })
         }
@@ -619,6 +628,24 @@ class WorldSession(
         val loot = GroundLoot(item, enemy.position)
         groundLoot = groundLoot + loot
         return loot
+    }
+
+    /**
+     * Rolls an insert for a slain monster, independently of its gear drop. A
+     * fight that yields no weapon can still yield something to put in one, so
+     * the socket economy does not stall behind the rarity table.
+     */
+    private fun dropInsertFor(enemy: EnemyInstance) {
+        if (content.inserts.isEmpty()) return
+        val chance = INSERT_DROP_CHANCE + enemy.rank.extraAffixChance
+        if (random.nextFloat() > chance) return
+
+        val depth = (config.seaLevel - enemy.blockPos.z).coerceAtLeast(0)
+        val insert = lootRoller.rollInsert(
+            itemLevel = Progression.itemLevelFor(player.level, depth),
+            random = random,
+        ) ?: return
+        groundInserts = groundInserts + GroundInsert(insert.id, enemy.position)
     }
 
     private fun awardExperience(amount: Int) {
@@ -670,6 +697,31 @@ class WorldSession(
         }
     }
 
+    /** Picks up inserts the player is standing on, into the pouch. */
+    private fun collectInserts(): List<CombatEvent> {
+        if (groundInserts.isEmpty()) return emptyList()
+
+        val (reached, remaining) = groundInserts.partition {
+            it.position.horizontalDistanceTo(player.position) <= PICKUP_RADIUS
+        }
+        if (reached.isEmpty()) return emptyList()
+
+        groundInserts = remaining
+        return reached.mapNotNull { ground ->
+            val definition = content.insert(ground.insertId) ?: return@mapNotNull null
+            player = player.withInsert(definition.id)
+            feedbackLog.add(
+                kind = FeedbackKind.LOOT,
+                text = definition.name,
+                origin = player.position,
+                color = definition.color,
+                emphasis = 1.1f,
+                lifetime = 1.3f,
+            )
+            CombatEvent.InsertTaken(definition)
+        }
+    }
+
     /**
      * Places a monster deliberately, for a scripted encounter or a shrine that
      * wakes something up. The director fills the world on its own; this is for
@@ -687,6 +739,77 @@ class WorldSession(
     /** Puts an item on the ground, for a chest or a quest reward. */
     fun dropLoot(item: ItemInstance, position: WorldPoint) {
         groundLoot = groundLoot + GroundLoot(item, position)
+    }
+
+    /** Puts an insert on the ground. */
+    fun dropInsert(insertId: String, position: WorldPoint) {
+        groundInserts = groundInserts + GroundInsert(insertId, position)
+    }
+
+    // ---- the anvil -------------------------------------------------------
+
+    /** Resolves an insert id against the loaded packs. */
+    fun insertOrNull(insertId: String): InsertDefinition? = content.insert(insertId)
+
+    /**
+     * The player's stats with their weapon's inserts counted in. Every combat
+     * path reads this rather than [PlayerState.combatStats], so a rune is never
+     * visible in the tooltip but missing from the swing.
+     */
+    val playerStats: com.stratum.core.domain.combat.CombatStats
+        get() = player.combatStatsWith(::insertOrNull)
+
+    /** Inserts the player is carrying loose, resolved and sorted for display. */
+    val heldInserts: List<HeldInsert>
+        get() = player.insertBag.entries
+            .mapNotNull { (id, count) ->
+                content.insert(id)?.let { HeldInsert(it, count) }
+            }
+            .sortedWith(compareByDescending<HeldInsert> { it.definition.tier }
+                .thenBy { it.definition.name })
+
+    /**
+     * Slots one of the player's inserts into an item they are holding.
+     *
+     * Spends the insert from the pouch and writes the item back wherever it
+     * lives, so an equipped weapon changes under the player's hand and a bagged
+     * one stays bagged.
+     */
+    fun slotInsert(instanceId: String, insertId: String): SocketResult {
+        val item = player.itemById(instanceId) ?: return SocketResult.NoSuchItem
+        if (content.insert(insertId) == null) return SocketResult.NoSuchInsert
+        val spent = player.consumingInsert(insertId) ?: return SocketResult.NoneHeld
+        val sockets = item.sockets.slotting(insertId) ?: return SocketResult.NoFreeSocket
+
+        val updated = item.copy(sockets = sockets)
+        player = spent.replacing(updated)
+        // Health can move when a rune carries it; top up rather than leaving the
+        // player at a fraction of a maximum they just earned.
+        player = player.copy(health = player.health.coerceAtMost(player.maxHealthWith(::insertOrNull)))
+        feedbackLog.add(
+            kind = FeedbackKind.LOOT,
+            text = content.insert(insertId)?.name ?: insertId,
+            origin = player.position,
+            color = content.insert(insertId)?.color ?: FEEDBACK_BUILT,
+            emphasis = 1.2f,
+            lifetime = 1.2f,
+        )
+        return SocketResult.Slotted(updated, insertId)
+    }
+
+    /**
+     * Pulls an insert back out. The insert returns to the pouch intact, which is
+     * the whole point of sockets over fusing: a decision you can take back.
+     */
+    fun unslotInsert(instanceId: String, socketIndex: Int): SocketResult {
+        val item = player.itemById(instanceId) ?: return SocketResult.NoSuchItem
+        val (sockets, insertId) = item.sockets.unslotting(socketIndex)
+            ?: return SocketResult.EmptySocket
+
+        val updated = item.copy(sockets = sockets)
+        player = player.replacing(updated).withInsert(insertId)
+        player = player.copy(health = player.health.coerceAtMost(player.maxHealthWith(::insertOrNull)))
+        return SocketResult.Unslotted(updated, insertId)
     }
 
     /** Environmental damage: a fall, a trap, a hazard block. */
@@ -867,6 +990,8 @@ class WorldSession(
         worldRevision = streamingWorld.loadedChunks.sumOf { it.revision },
         enemies = enemies,
         groundLoot = groundLoot,
+        groundInserts = groundInserts,
+        heldInserts = heldInserts,
         skills = skills,
     )
 
@@ -876,6 +1001,8 @@ class WorldSession(
         const val SPAWN_SEARCH_RADIUS = 12
         const val PICKUP_RADIUS = 1.6f
         const val BASE_DROP_CHANCE = 0.35f
+        /** Rolled separately from gear, so a socket always has something to fill it. */
+        const val INSERT_DROP_CHANCE = 0.22f
         const val DEFAULT_DAMAGE_TYPE = "stratum:physical"
 
         /** Blocks per second at full stick deflection. */
@@ -932,6 +1059,8 @@ data class SessionSnapshot(
     val worldRevision: Int,
     val enemies: List<EnemyInstance> = emptyList(),
     val groundLoot: List<GroundLoot> = emptyList(),
+    val groundInserts: List<GroundInsert> = emptyList(),
+    val heldInserts: List<HeldInsert> = emptyList(),
     val skills: List<SkillDefinition> = emptyList(),
 )
 
@@ -957,6 +1086,25 @@ sealed interface BuildResult {
 /** An item lying in the world. */
 data class GroundLoot(val item: ItemInstance, val position: WorldPoint)
 
+/** An insert lying in the world, identified rather than instanced: two of the
+ * same rune are the same rune. */
+data class GroundInsert(val insertId: String, val position: WorldPoint)
+
+/** An insert in the pouch, with how many of it the player holds. */
+data class HeldInsert(val definition: InsertDefinition, val count: Int)
+
+/** What a trip to the anvil did. */
+sealed interface SocketResult {
+    data class Slotted(val item: ItemInstance, val insertId: String) : SocketResult
+    data class Unslotted(val item: ItemInstance, val insertId: String) : SocketResult
+
+    data object NoSuchItem : SocketResult
+    data object NoSuchInsert : SocketResult
+    data object NoneHeld : SocketResult
+    data object NoFreeSocket : SocketResult
+    data object EmptySocket : SocketResult
+}
+
 /** What a swing did. */
 sealed interface AttackReport {
     data class Landed(
@@ -981,5 +1129,6 @@ sealed interface CombatEvent {
     /** An attack that would have landed but did not, because of a roll. */
     data class PlayerDodged(val amountAvoided: Int) : CombatEvent
     data class LootTaken(val item: ItemInstance, val equipped: Boolean) : CombatEvent
+    data class InsertTaken(val insert: InsertDefinition) : CombatEvent
     data object PlayerDied : CombatEvent
 }

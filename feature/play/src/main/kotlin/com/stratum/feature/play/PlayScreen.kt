@@ -70,6 +70,10 @@ fun PlayScreen(
         onStopMining = viewModel::stopMining,
         onAttack = viewModel::attack,
         onCastSkill = viewModel::castSkill,
+        onToggleAnvil = viewModel::toggleAnvil,
+        onSelectAnvilItem = viewModel::selectAnvilItem,
+        onSlotInsert = viewModel::slotInsert,
+        onUnslotInsert = viewModel::unslotInsert,
         onOpenMenu = onOpenMenu,
     )
 }
@@ -93,6 +97,10 @@ fun PlayScreenContent(
     onStopMining: () -> Unit = {},
     onAttack: () -> Unit = {},
     onCastSkill: (String) -> Unit = {},
+    onToggleAnvil: () -> Unit = {},
+    onSelectAnvilItem: (String) -> Unit = {},
+    onSlotInsert: (String, String) -> Unit = { _, _ -> },
+    onUnslotInsert: (String, Int) -> Unit = { _, _ -> },
     onOpenMenu: () -> Unit = {},
 ) {
     val colors = StratumTheme.colors
@@ -109,6 +117,8 @@ fun PlayScreenContent(
                 playerAccent = colors.accent,
                 enemies = state.enemies,
                 groundLoot = state.groundLoot,
+                groundInserts = state.groundInserts,
+                insertColor = { state.insertOrNull(it)?.color },
                 feedback = state.feedback,
                 playerFlash = state.playerFlash,
                 isRolling = state.isRolling,
@@ -144,7 +154,24 @@ fun PlayScreenContent(
                     emphasis = ActionEmphasis.SECONDARY,
                 )
                 Spacer(Modifier.height(Space.small))
+                StratumAction(
+                    label = if (state.heldInserts.isEmpty()) "Anvil" else "Anvil ${state.heldInserts.sumOf { it.count }}",
+                    onClick = onToggleAnvil,
+                    emphasis = if (state.anvilOpen) ActionEmphasis.PRIMARY else ActionEmphasis.SECONDARY,
+                )
+                Spacer(Modifier.height(Space.small))
                 ZoomControls(onZoom = onZoom)
+            }
+
+            if (state.anvilOpen && !state.isDead) {
+                AnvilOverlay(
+                    state = state,
+                    onSelectItem = onSelectAnvilItem,
+                    onSlot = onSlotInsert,
+                    onUnslot = onUnslotInsert,
+                    onClose = onToggleAnvil,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
 
             if (state.isDead) {

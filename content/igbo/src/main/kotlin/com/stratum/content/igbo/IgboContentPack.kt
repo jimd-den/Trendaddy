@@ -212,6 +212,7 @@ object IgboContentPack {
         loreEntries = lore,
         damageTypes = IgboPackCombat.damageTypes,
         affixes = IgboPackCombat.affixes,
+        inserts = IgboPackCombat.inserts,
         weapons = IgboPackCombat.weapons,
         enemies = IgboPackCombat.enemies,
         skills = IgboPackCombat.skills,

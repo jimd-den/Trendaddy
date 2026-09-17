@@ -5,6 +5,7 @@ import com.stratum.core.domain.actor.SkillDefinition
 import com.stratum.core.domain.combat.CombatStats
 import com.stratum.core.domain.combat.DamageTypeDefinition
 import com.stratum.core.domain.item.AffixDefinition
+import com.stratum.core.domain.item.InsertDefinition
 import com.stratum.core.domain.item.ItemRarity
 import com.stratum.core.domain.item.RarityStyle
 import com.stratum.core.domain.item.WeaponBase
@@ -36,6 +37,7 @@ data class ContentPack(
     // dig but not fight in, which is a legitimate thing for a pack to be.
     val damageTypes: List<DamageTypeDefinition> = emptyList(),
     val affixes: List<AffixDefinition> = emptyList(),
+    val inserts: List<InsertDefinition> = emptyList(),
     val weapons: List<WeaponBase> = emptyList(),
     val enemies: List<EnemyDefinition> = emptyList(),
     val skills: List<SkillDefinition> = emptyList(),

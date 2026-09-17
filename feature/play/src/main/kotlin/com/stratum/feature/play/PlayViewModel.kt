@@ -6,6 +6,9 @@ import androidx.lifecycle.viewModelScope
 import com.stratum.core.domain.content.AssembledContent
 import com.stratum.core.domain.actor.EnemyInstance
 import com.stratum.core.domain.actor.SkillDefinition
+import com.stratum.core.domain.item.InsertDefinition
+import com.stratum.core.domain.item.ItemInstance
+import com.stratum.core.domain.item.ItemRarity
 import com.stratum.core.domain.session.PlayerState
 import com.stratum.core.domain.world.BlockPos
 import com.stratum.core.domain.world.World
@@ -19,7 +22,10 @@ import com.stratum.engine.world.BuildTool
 import com.stratum.engine.world.DodgeResult
 import com.stratum.core.domain.sprite.AnimationPlayback
 import com.stratum.engine.world.FeedbackMark
+import com.stratum.engine.world.GroundInsert
 import com.stratum.engine.world.GroundLoot
+import com.stratum.engine.world.HeldInsert
+import com.stratum.engine.world.SocketResult
 import com.stratum.engine.world.MineResult
 import com.stratum.engine.world.PlaceRejection
 import com.stratum.engine.world.PlaceResult
@@ -95,6 +101,45 @@ class PlayViewModel(
         // Taking a hit is already visible on the health meter; saying so as well
         // would drown out the messages that are not.
         is CombatEvent.PlayerHurt -> null
+        is CombatEvent.InsertTaken -> "Picked up ${event.insert.name}"
+    }
+
+    // ---- the anvil -------------------------------------------------------
+
+    /**
+     * Opens or closes the anvil. Opening it does not pause the world: the fight
+     * is still happening, and re-socketing mid-fight is a decision with a cost
+     * rather than a free menu.
+     */
+    fun toggleAnvil() {
+        _state.value = _state.value.copy(anvilOpen = !_state.value.anvilOpen)
+        publish()
+    }
+
+    /** Chooses which of the player's items the anvil is working on. */
+    fun selectAnvilItem(instanceId: String) {
+        _state.value = _state.value.copy(anvilItemId = instanceId)
+        publish()
+    }
+
+    fun slotInsert(instanceId: String, insertId: String) {
+        publish(message = describe(session.slotInsert(instanceId, insertId)))
+    }
+
+    fun unslotInsert(instanceId: String, socketIndex: Int) {
+        publish(message = describe(session.unslotInsert(instanceId, socketIndex)))
+    }
+
+    private fun describe(result: SocketResult): String = when (result) {
+        is SocketResult.Slotted ->
+            "Set ${session.insertOrNull(result.insertId)?.name ?: "it"} into ${result.item.name}"
+        is SocketResult.Unslotted ->
+            "Drew ${session.insertOrNull(result.insertId)?.name ?: "it"} back out"
+        SocketResult.NoFreeSocket -> "No socket free"
+        SocketResult.NoneHeld -> "You have none of those"
+        SocketResult.NoSuchInsert -> "Unknown insert"
+        SocketResult.NoSuchItem -> "You are not carrying that"
+        SocketResult.EmptySocket -> "That socket is already empty"
     }
 
     private fun initialState(content: AssembledContent) = PlayUiState(
@@ -262,6 +307,10 @@ class PlayViewModel(
             worldRevision = snapshot.worldRevision,
             enemies = snapshot.enemies,
             groundLoot = snapshot.groundLoot,
+            groundInserts = snapshot.groundInserts,
+            heldInserts = snapshot.heldInserts,
+            insertFor = session::insertOrNull,
+            rarityColors = session.content::rarityColor,
             isRolling = snapshot.isRolling,
             isInvulnerable = snapshot.isInvulnerable,
             rollCooldownFraction = snapshot.rollCooldownFraction,
@@ -337,6 +386,15 @@ data class PlayUiState(
     val worldRevision: Int = 0,
     val enemies: List<EnemyInstance> = emptyList(),
     val groundLoot: List<GroundLoot> = emptyList(),
+    val groundInserts: List<GroundInsert> = emptyList(),
+    val heldInserts: List<HeldInsert> = emptyList(),
+    /** Pack lookups the anvil needs. Passed as functions rather than copies so
+     * the UI never holds a stale snapshot of the loaded packs. */
+    val insertFor: (String) -> InsertDefinition? = { null },
+    val rarityColors: (ItemRarity) -> Long = { DEFAULT_RARITY_TINT },
+    val anvilOpen: Boolean = false,
+    /** Which item the anvil is working on; falls back to what is equipped. */
+    val anvilItemId: String? = null,
     val isRolling: Boolean = false,
     val isInvulnerable: Boolean = false,
     val rollCooldownFraction: Float = 0f,
@@ -361,4 +419,23 @@ data class PlayUiState(
     fun cooldownFraction(skill: SkillDefinition): Float = player.cooldowns.fractionRemaining(skill)
 
     fun canAfford(skill: SkillDefinition): Boolean = player.resource >= skill.resourceCost
+
+    /** Everything the player could socket, equipped weapon first. */
+    val anvilItems: List<ItemInstance>
+        get() = (listOfNotNull(player.equippedWeapon) + player.bag).filter { it.socketCount > 0 }
+
+    /**
+     * The item the anvil is showing. Falls back rather than showing nothing when
+     * the selected item was equipped, sold or replaced out from under the panel.
+     */
+    val anvilItem: ItemInstance?
+        get() = anvilItemId?.let { id -> anvilItems.firstOrNull { it.instanceId == id } }
+            ?: anvilItems.firstOrNull()
+
+    fun insertOrNull(insertId: String): InsertDefinition? = insertFor(insertId)
+
+    fun rarityColor(item: ItemInstance): Long = rarityColors(item.rarity)
 }
+
+/** Used before a pack is resolved, and by previews. */
+private const val DEFAULT_RARITY_TINT = 0xFFB0BEC5L

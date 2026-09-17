@@ -28,6 +28,7 @@ import com.stratum.core.domain.world.World
 import com.stratum.core.domain.world.WorldPoint
 import com.stratum.engine.world.FeedbackKind
 import com.stratum.engine.world.FeedbackMark
+import com.stratum.engine.world.GroundInsert
 import com.stratum.engine.world.GroundLoot
 import com.stratum.engine.world.IsometricProjection
 
@@ -48,6 +49,9 @@ fun WorldCanvas(
     playerAccent: Color = PLAYER_RING,
     enemies: List<EnemyInstance> = emptyList(),
     groundLoot: List<GroundLoot> = emptyList(),
+    groundInserts: List<GroundInsert> = emptyList(),
+    /** Resolves a dropped insert's colour; nulls fall back to a neutral tint. */
+    insertColor: (String) -> Long? = { null },
     feedback: List<FeedbackMark> = emptyList(),
     /** 0..1, how recently the player was hit. Drives the hurt tint. */
     playerFlash: Float = 0f,
@@ -170,6 +174,7 @@ fun WorldCanvas(
         // in front of another draws over it.
         val actors = buildList {
             groundLoot.forEach { add(Actor.Loot(it)) }
+            groundInserts.forEach { add(Actor.Insert(it)) }
             enemies.filter { it.isAlive }.forEach { add(Actor.Monster(it)) }
             add(Actor.Player(playerPosition))
         }.sortedBy { projection.depthKey(it.position) }
@@ -180,6 +185,12 @@ fun WorldCanvas(
             val y = originY + screen.y
             when (actor) {
                 is Actor.Loot -> drawLoot(x, y, projection, Color(actor.loot.item.rarity.beamColor()))
+                // Inserts get the same beam at half height: unmistakably loot,
+                // unmistakably not a weapon.
+                is Actor.Insert -> drawInsert(
+                    x, y, projection,
+                    Color(insertColor(actor.ground.insertId) ?: DEFAULT_INSERT_TINT),
+                )
                 is Actor.Monster -> {
                     val sprite = spriteFor(SpriteKey.Monster(actor.enemy.definitionId))
                     if (sprite != null) {
@@ -240,6 +251,9 @@ private sealed interface Actor {
     }
     data class Loot(val loot: GroundLoot) : Actor {
         override val position: WorldPoint get() = loot.position
+    }
+    data class Insert(val ground: GroundInsert) : Actor {
+        override val position: WorldPoint get() = ground.position
     }
 }
 
@@ -450,6 +464,25 @@ private fun DrawScope.drawLoot(
     drawPath(diamond, Color.Black.copy(alpha = 0.6f), style = Stroke(1.5f))
 }
 
+/** A dropped insert: a small bright bead, under a short beam of its own colour. */
+private fun DrawScope.drawInsert(
+    x: Float,
+    y: Float,
+    projection: IsometricProjection,
+    color: Color,
+) {
+    val scale = projection.tileWidth * projection.zoom
+    val radius = scale * 0.07f
+
+    drawRect(
+        color = color.copy(alpha = 0.22f),
+        topLeft = Offset(x - radius * 0.4f, y - scale * 0.45f),
+        size = Size(radius * 0.8f, scale * 0.45f),
+    )
+    drawCircle(color, radius, Offset(x, y))
+    drawCircle(Color.Black.copy(alpha = 0.55f), radius, Offset(x, y), style = Stroke(1.5f))
+}
+
 /** Bigger ranks are literally bigger, which reads faster than any label. */
 private fun com.stratum.core.domain.actor.EnemyRank.sizeMultiplier(): Float = when (this) {
     com.stratum.core.domain.actor.EnemyRank.MINION -> 1f
@@ -472,6 +505,8 @@ private fun com.stratum.core.domain.item.ItemRarity.beamColor(): Long = when (th
     com.stratum.core.domain.item.ItemRarity.EPIC -> 0xFFFF7043
     com.stratum.core.domain.item.ItemRarity.RELIC -> 0xFF26A69A
 }
+
+private const val DEFAULT_INSERT_TINT = 0xFF7FD4E0L
 
 private val ENEMY_HEALTH = Color(0xFFD2544B)
 private const val HEALTH_BAR_HEIGHT = 3f

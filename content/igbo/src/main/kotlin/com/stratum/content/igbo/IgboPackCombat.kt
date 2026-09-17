@@ -8,6 +8,7 @@ import com.stratum.core.domain.combat.DamageTypeDefinition
 import com.stratum.core.domain.item.AffixDefinition
 import com.stratum.core.domain.item.AffixKind
 import com.stratum.core.domain.item.AffixStat
+import com.stratum.core.domain.item.InsertDefinition
 import com.stratum.core.domain.item.ItemRarity
 import com.stratum.core.domain.item.RarityStyle
 import com.stratum.core.domain.item.WeaponBase
@@ -128,6 +129,131 @@ internal object IgboPackCombat {
         AffixDefinition("$NS:of_communion", "of Communion", AffixKind.SUFFIX, AffixStat.LIFE_STEAL, 0.03f, 0.12f, minItemLevel = 5, weight = 60),
         AffixDefinition("$NS:of_judgement", "of Judgement", AffixKind.SUFFIX, AffixStat.CRIT_MULTIPLIER, 0.15f, 0.55f, minItemLevel = 7, weight = 55),
         AffixDefinition("$NS:of_the_ozo", "of the Ozo", AffixKind.SUFFIX, AffixStat.MAX_HEALTH, 25f, 80f, minItemLevel = 9, weight = 45),
+    )
+
+    // ---- inserts ---------------------------------------------------------
+
+    /**
+     * What goes in the sockets. Three families on purpose: ogu beads add a
+     * number, nzu chalk converts what the weapon deals, and Igbo-Ukwu bronze is
+     * the late-game tier that does both jobs harder.
+     *
+     * The converting ones are the reason to keep a weapon you have outgrown:
+     * the blade is a frame, and the element is the part you re-decide.
+     */
+    val inserts = listOf(
+        InsertDefinition(
+            id = "$NS:ogu_bead",
+            name = "Ogu Bead",
+            description = "Carved from a staff of truth. Quiet, and it hits harder than it looks.",
+            stat = AffixStat.ATTACK_POWER,
+            value = 4f,
+            color = 0xFFD7A86E,
+            weight = 170,
+        ),
+        InsertDefinition(
+            id = "$NS:iron_stud",
+            name = "Iron Stud",
+            description = "Hammered flat and set into the haft. It is not subtle.",
+            stat = AffixStat.ARMOUR,
+            value = 5f,
+            color = 0xFF90A4AE,
+            weight = 150,
+        ),
+        InsertDefinition(
+            id = "$NS:palm_resin",
+            name = "Palm Resin",
+            description = "Sticky, and it makes a grip you do not have to think about.",
+            stat = AffixStat.ATTACK_SPEED,
+            value = 0.12f,
+            color = 0xFFCDDC39,
+            weight = 120,
+        ),
+        InsertDefinition(
+            id = "$NS:whetted_flake",
+            name = "Whetted Flake",
+            description = "A splinter of the edge, set back into the edge.",
+            stat = AffixStat.CRIT_CHANCE,
+            value = 0.05f,
+            color = 0xFFE0E0E0,
+            minItemLevel = 4,
+            weight = 95,
+        ),
+        InsertDefinition(
+            id = "$NS:mining_flint",
+            name = "Mining Flint",
+            description = "For the ones who came down here to dig, not to fight.",
+            stat = AffixStat.MINING_SPEED,
+            value = 0.35f,
+            color = 0xFFA1887F,
+            weight = 110,
+        ),
+
+        // Converters. Each carries its own damage as attack power too, so
+        // switching your element is never a straight downgrade.
+        InsertDefinition(
+            id = "$NS:thunder_shard",
+            name = "Thunder Shard",
+            description = "Amadioha's ram struck a rock and this is what was left standing.",
+            stat = AffixStat.ATTACK_POWER,
+            value = 6f,
+            damageTypeId = thunder.id,
+            convertsDamageType = true,
+            tier = 2,
+            color = 0xFF00E5FF,
+            minItemLevel = 3,
+            weight = 80,
+        ),
+        InsertDefinition(
+            id = "$NS:sun_ember",
+            name = "Sun Ember",
+            description = "Anyanwu's light, kept in a bead that has not cooled since.",
+            stat = AffixStat.ATTACK_POWER,
+            value = 6f,
+            damageTypeId = solar.id,
+            convertsDamageType = true,
+            tier = 2,
+            color = 0xFFFF6D00,
+            minItemLevel = 3,
+            weight = 80,
+        ),
+        InsertDefinition(
+            id = "$NS:venom_pearl",
+            name = "Venom Pearl",
+            description = "Idemili's river keeps what it swallows, and sometimes gives it back.",
+            stat = AffixStat.ATTACK_POWER,
+            value = 5f,
+            damageTypeId = venom.id,
+            convertsDamageType = true,
+            tier = 2,
+            color = 0xFF00E676,
+            minItemLevel = 3,
+            weight = 80,
+        ),
+        InsertDefinition(
+            id = "$NS:ancestor_nzu",
+            name = "Ancestor Nzu",
+            description = "White chalk pressed into the socket. What you swing, they swing.",
+            stat = AffixStat.LIFE_STEAL,
+            value = 0.06f,
+            damageTypeId = spirit.id,
+            convertsDamageType = true,
+            tier = 3,
+            color = 0xFFB388FF,
+            minItemLevel = 6,
+            weight = 45,
+        ),
+        InsertDefinition(
+            id = "$NS:igbo_ukwu_bronze",
+            name = "Igbo-Ukwu Bronze",
+            description = "Cast a thousand years ago by someone who expected it to outlast you.",
+            stat = AffixStat.CRIT_MULTIPLIER,
+            value = 0.4f,
+            tier = 3,
+            color = 0xFF26A69A,
+            minItemLevel = 9,
+            weight = 30,
+        ),
     )
 
     // ---- monsters --------------------------------------------------------

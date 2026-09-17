@@ -151,6 +151,53 @@ class StratumScreenshotTest {
     }
 
     @Test
+    fun anvil_screen() {
+        val content = GameSetup.assemble()
+        val session = WorldSession(content, WorldConfig(seed = 99L, simulationRadius = 2))
+        repeat(20) { session.tick(0.2f) }
+
+        // A relic with four sockets, two of them already filled, and a pouch
+        // with something to put in the rest: the state the panel has to read
+        // clearly is the half-finished one, not the empty one.
+        val relic = com.stratum.engine.world.LootRoller(content.weapons, content.affixes, content.inserts)
+            .craft(
+                content.weapons.last(),
+                itemLevel = 24,
+                rarity = com.stratum.core.domain.item.ItemRarity.RELIC,
+                random = kotlin.random.Random(5),
+            )
+        content.inserts.take(5).forEach { session.dropInsert(it.id, session.player.position) }
+        session.dropLoot(relic, session.player.position)
+        session.tick(0.05f)
+
+        val socketed = session.player.equippedWeapon!!
+        content.inserts.take(2).forEach { session.slotInsert(socketed.instanceId, it.id) }
+
+        composeTestRule.setContent {
+            StratumTheme(palette = content.palette, darkTheme = true) {
+                PlayScreenContent(
+                    state = PlayUiState(
+                        player = session.player,
+                        camera = session.player.position,
+                        projection = IsometricProjection(zoom = 1f),
+                        palette = content.palette,
+                        biomeName = session.currentBiome.name,
+                        enemies = session.enemies,
+                        skills = session.skills,
+                        heldInserts = session.heldInserts,
+                        insertFor = session::insertOrNull,
+                        rarityColors = content::rarityColor,
+                        anvilOpen = true,
+                    ),
+                    world = session.world,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        composeTestRule.onRoot().captureRoboImage(filePath = "src/test/screenshots/anvil.png")
+    }
+
+    @Test
     fun forge_screen() {
         // Rendered with a result in hand, because the preview after generation
         // is the part of this screen worth guarding against regressions.
