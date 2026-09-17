@@ -18,7 +18,10 @@ class GenerateSpriteSheetUseCase(
     private val imageModel: ImageModelPort,
 ) {
 
-    suspend operator fun invoke(request: SpriteSheetRequest): Result<GeneratedSpriteSheet> {
+    suspend operator fun invoke(
+        request: SpriteSheetRequest,
+        observer: GenerationObserver = GenerationObserver.None,
+    ): Result<GeneratedSpriteSheet> {
         val layout = request.layout
         val generated = imageModel.generateImage(
             ImageRequest(
@@ -28,6 +31,7 @@ class GenerateSpriteSheetUseCase(
                 height = layout.sheetHeight,
                 requireTransparency = true,
             ),
+            observer,
         ).getOrElse { return Result.failure(it) }
 
         if (generated.bytes.isEmpty()) {

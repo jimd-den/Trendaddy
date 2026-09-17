@@ -6,7 +6,10 @@ package com.stratum.core.domain.ai
  * are transport concerns that belong in the data layer.
  */
 interface LanguageModelPort {
-    suspend fun complete(request: CompletionRequest): Result<String>
+    suspend fun complete(
+        request: CompletionRequest,
+        observer: GenerationObserver = GenerationObserver.None,
+    ): Result<String>
 }
 
 /**
@@ -14,7 +17,16 @@ interface LanguageModelPort {
  * than a bitmap so the domain stays free of Android graphics.
  */
 interface ImageModelPort {
-    suspend fun generateImage(request: ImageRequest): Result<GeneratedImage>
+    /**
+     * [observer] is how the adapter reports what it is doing and exactly what it
+     * sent. Defaulted so a caller that does not care is unaffected, but the
+     * sprite forge passes a real one: an image model that rejects a sheet is
+     * only debuggable if you can read the request and the provider's reply.
+     */
+    suspend fun generateImage(
+        request: ImageRequest,
+        observer: GenerationObserver = GenerationObserver.None,
+    ): Result<GeneratedImage>
 }
 
 data class CompletionRequest(

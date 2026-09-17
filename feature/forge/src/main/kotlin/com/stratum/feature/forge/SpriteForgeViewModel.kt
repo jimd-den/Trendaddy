@@ -6,6 +6,10 @@ import androidx.lifecycle.viewModelScope
 import com.stratum.core.domain.ai.GenerateSpriteSheetUseCase
 import com.stratum.core.domain.ai.SheetLayout
 import com.stratum.core.domain.ai.SpriteSheetRequest
+import com.stratum.core.domain.ai.GenerationAttempt
+import com.stratum.core.domain.ai.GenerationJournal
+import com.stratum.core.domain.ai.GenerationObserver
+import com.stratum.core.domain.ai.GenerationStage
 import com.stratum.core.domain.sprite.SpriteSheet
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +29,8 @@ class SpriteForgeViewModel(
     private val loadSheets: () -> List<SpriteSheet>,
     private val deleteSheet: (String) -> Unit,
     private val isProviderConfigured: () -> Boolean,
+    /** The last few provider calls, so a failure can be read rather than guessed at. */
+    private val journal: GenerationJournal = GenerationJournal(),
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(
@@ -66,7 +72,28 @@ class SpriteForgeViewModel(
             return
         }
 
-        _state.value = current.copy(busy = true, error = null, lastGenerated = null)
+        _state.value = current.copy(
+            busy = true,
+            error = null,
+            lastGenerated = null,
+            stage = GenerationStage.PREPARING,
+            attempt = null,
+        )
+
+        // Reports what the adapter is doing and exactly what it sent. An image
+        // model can sit on a request for minutes; a spinner that says nothing
+        // for minutes is indistinguishable from a hang, and a rejection with no
+        // request to look at is indistinguishable from a bug.
+        val observer = object : GenerationObserver {
+            override fun onStage(stage: GenerationStage) {
+                _state.value = _state.value.copy(stage = stage)
+            }
+
+            override fun onAttempt(attempt: GenerationAttempt) {
+                journal.record(attempt)
+                _state.value = _state.value.copy(attempt = attempt)
+            }
+        }
 
         viewModelScope.launch {
             val result = generateSheet(
@@ -76,12 +103,15 @@ class SpriteForgeViewModel(
                     styleDirection = current.style,
                     layout = current.target.layout,
                 ),
+                observer,
             )
             _state.value = result.fold(
                 onSuccess = { generated ->
+                    _state.value = _state.value.copy(stage = GenerationStage.SAVING)
                     saveSheet(generated.sheet, generated.image.bytes)
                     _state.value.copy(
                         busy = false,
+                        stage = GenerationStage.DONE,
                         sheets = loadSheets(),
                         lastGenerated = generated.sheet,
                         error = null,
@@ -90,11 +120,17 @@ class SpriteForgeViewModel(
                 onFailure = { cause ->
                     _state.value.copy(
                         busy = false,
+                        stage = GenerationStage.FAILED,
                         error = cause.message ?: "Generation failed.",
                     )
                 },
             )
         }
+    }
+
+    /** Opens or closes the panel showing exactly what was sent and what came back. */
+    fun toggleDetails() {
+        _state.value = _state.value.copy(detailsOpen = !_state.value.detailsOpen)
     }
 
     fun delete(sheetId: String) {
@@ -144,4 +180,12 @@ data class SpriteForgeUiState(
     val lastGenerated: SpriteSheet? = null,
     val error: String? = null,
     val providerConfigured: Boolean = false,
-)
+    val stage: GenerationStage? = null,
+    /** The provider call behind the current result, successful or not. */
+    val attempt: GenerationAttempt? = null,
+    val detailsOpen: Boolean = false,
+) {
+    val progress: Float get() = stage?.fraction ?: 0f
+
+    val stageLabel: String? get() = stage?.label
+}

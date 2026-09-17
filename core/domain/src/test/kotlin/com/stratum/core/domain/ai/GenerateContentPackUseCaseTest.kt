@@ -14,8 +14,13 @@ class GenerateContentPackUseCaseTest {
 
     private class FakeModel(private val reply: Result<String>) : LanguageModelPort {
         var lastRequest: CompletionRequest? = null
-        override suspend fun complete(request: CompletionRequest): Result<String> {
+        var stages = mutableListOf<GenerationStage>()
+        override suspend fun complete(
+            request: CompletionRequest,
+            observer: GenerationObserver,
+        ): Result<String> {
             lastRequest = request
+            observer.onStage(GenerationStage.SENDING)
             return reply
         }
     }

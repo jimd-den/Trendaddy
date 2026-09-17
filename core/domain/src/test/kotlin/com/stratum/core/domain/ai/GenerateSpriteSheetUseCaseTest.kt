@@ -14,8 +14,12 @@ class GenerateSpriteSheetUseCaseTest {
         private val reply: Result<GeneratedImage>,
     ) : ImageModelPort {
         var lastRequest: ImageRequest? = null
-        override suspend fun generateImage(request: ImageRequest): Result<GeneratedImage> {
+        override suspend fun generateImage(
+            request: ImageRequest,
+            observer: GenerationObserver,
+        ): Result<GeneratedImage> {
             lastRequest = request
+            observer.onStage(GenerationStage.SENDING)
             return reply
         }
     }

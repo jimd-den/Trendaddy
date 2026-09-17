@@ -20,7 +20,10 @@ class GenerateContentPackUseCase(
     private val assembler: ContentPackAssembler = ContentPackAssembler(),
 ) {
 
-    suspend operator fun invoke(request: PackGenerationRequest): Result<ContentPack> {
+    suspend operator fun invoke(
+        request: PackGenerationRequest,
+        observer: GenerationObserver = GenerationObserver.None,
+    ): Result<ContentPack> {
         val completion = languageModel.complete(
             CompletionRequest(
                 systemPrompt = SYSTEM_PROMPT,
@@ -28,6 +31,7 @@ class GenerateContentPackUseCase(
                 temperature = request.temperature,
                 modelId = request.modelId,
             ),
+            observer,
         )
 
         val raw = completion.getOrElse { return Result.failure(it) }
@@ -147,7 +151,10 @@ class GenerateLoreUseCase(
     private val languageModel: LanguageModelPort,
 ) {
 
-    suspend operator fun invoke(request: LoreGenerationRequest): Result<List<LoreEntry>> {
+    suspend operator fun invoke(
+        request: LoreGenerationRequest,
+        observer: GenerationObserver = GenerationObserver.None,
+    ): Result<List<LoreEntry>> {
         val completion = languageModel.complete(
             CompletionRequest(
                 systemPrompt = SYSTEM_PROMPT,
@@ -163,6 +170,7 @@ class GenerateLoreUseCase(
                 temperature = request.temperature,
                 modelId = request.modelId,
             ),
+            observer,
         )
 
         val raw = completion.getOrElse { return Result.failure(it) }
