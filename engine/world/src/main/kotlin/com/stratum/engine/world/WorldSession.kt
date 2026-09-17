@@ -43,6 +43,15 @@ class WorldSession(
     private val random = Random(config.seed)
 
     private val combat = CombatResolver()
+
+    private val feedbackLog = FeedbackLog()
+    private val hitFlashes = HitFlashes()
+
+    /** Short-lived visuals: damage numbers, misses, level-ups. */
+    val feedback: List<FeedbackMark> get() = feedbackLog.active
+
+    /** How lit an actor is from a recent hit, 0..1. */
+    fun flashFor(actorId: String): Float = hitFlashes.intensity(actorId)
     private val lootRoller = LootRoller(content.weapons, content.affixes)
     private val director = EnemyDirector(streamingWorld, content.enemies)
 
@@ -390,6 +399,9 @@ class WorldSession(
 
         val produced = mutableListOf<CombatEvent>()
 
+        feedbackLog.advance(deltaSeconds)
+        hitFlashes.advance(deltaSeconds)
+
         // Movement first: a roll should be able to carry the player out of
         // reach before the monsters around them take their swing.
         advanceMovement(deltaSeconds)
@@ -416,10 +428,35 @@ class WorldSession(
                     // The swing happened and went on cooldown; it simply did not
                     // land. Reporting it is what makes a well-timed roll legible.
                     produced += CombatEvent.PlayerDodged(incoming.totalDamage)
+                    feedbackLog.add(
+                        kind = FeedbackKind.DODGED,
+                        text = "DODGED",
+                        origin = player.position,
+                        color = FEEDBACK_DODGE,
+                        emphasis = 1.1f,
+                    )
                 } else {
                     player = player.damaged(incoming.totalDamage)
                     produced += CombatEvent.PlayerHurt(incoming.totalDamage, incoming.results)
-                    if (!player.isAlive) produced += CombatEvent.PlayerDied
+                    feedbackLog.add(
+                        kind = FeedbackKind.DAMAGE_TAKEN,
+                        text = "-${incoming.totalDamage}",
+                        origin = player.position,
+                        color = FEEDBACK_HURT,
+                        emphasis = 1.2f,
+                    )
+                    hitFlashes.strike(PLAYER_ACTOR_ID)
+                    if (!player.isAlive) {
+                        produced += CombatEvent.PlayerDied
+                        feedbackLog.add(
+                            kind = FeedbackKind.KILL,
+                            text = "FALLEN",
+                            origin = player.position,
+                            color = FEEDBACK_HURT,
+                            emphasis = 1.8f,
+                            lifetime = 2.5f,
+                        )
+                    }
                 }
             }
         }
@@ -481,13 +518,55 @@ class WorldSession(
         val byId = outcome.hits.associateBy { it.enemyId }
         enemies = enemies.map { byId[it.instanceId]?.enemy ?: it }
 
+        outcome.hits.forEach { hit ->
+            val typeColor = content.damageType(hit.result.damageTypeId).color
+            when {
+                hit.result.wasBlocked -> feedbackLog.add(
+                    kind = FeedbackKind.BLOCKED,
+                    text = "BLOCKED",
+                    origin = hit.enemy.position,
+                    color = FEEDBACK_BLOCKED,
+                    emphasis = 0.85f,
+                )
+                hit.result.wasCritical -> feedbackLog.add(
+                    kind = FeedbackKind.CRITICAL,
+                    text = "${hit.result.amount}!",
+                    origin = hit.enemy.position,
+                    color = typeColor,
+                    // Crits read as bigger and last longer. A critical the
+                    // player cannot distinguish from a normal hit is a stat
+                    // they have no reason to build for.
+                    emphasis = 1.7f,
+                    lifetime = 1.2f,
+                )
+                else -> feedbackLog.add(
+                    kind = FeedbackKind.DAMAGE_DEALT,
+                    text = hit.result.amount.toString(),
+                    origin = hit.enemy.position,
+                    color = typeColor,
+                )
+            }
+            hitFlashes.strike(hit.enemyId)
+        }
+
         val healed = outcome.hits.sumOf { it.result.healedAttacker }
-        if (healed > 0) player = player.healed(healed)
+        if (healed > 0) {
+            player = player.healed(healed)
+            feedbackLog.add(
+                kind = FeedbackKind.HEAL,
+                text = "+$healed",
+                origin = player.position,
+                color = FEEDBACK_HEAL,
+            )
+        }
 
         val slain = enemies.filterNot { it.isAlive }
         if (slain.isNotEmpty()) {
             enemies = enemies.filter { it.isAlive }
-            slain.forEach { dropLootFor(it) }
+            slain.forEach { enemy ->
+                hitFlashes.forget(enemy.instanceId)
+                dropLootFor(enemy)
+            }
             awardExperience(slain.sumOf { it.experience })
         }
 
@@ -530,6 +609,14 @@ class WorldSession(
                 health = player.maxHealthWithGear,
                 resource = player.maxResource,
             )
+            feedbackLog.add(
+                kind = FeedbackKind.LEVEL_UP,
+                text = "LEVEL ${result.level}",
+                origin = player.position,
+                color = FEEDBACK_LEVEL,
+                emphasis = 1.9f,
+                lifetime = 1.8f,
+            )
         }
     }
 
@@ -548,6 +635,14 @@ class WorldSession(
             // drop is the fastest way to make loot stop feeling like a reward.
             val autoEquipped = player.isUpgrade(loot.item)
             player = if (autoEquipped) player.equipping(loot.item) else player.collecting(loot.item)
+            feedbackLog.add(
+                kind = FeedbackKind.LOOT,
+                text = loot.item.name,
+                origin = player.position,
+                color = content.rarityColor(loot.item.rarity),
+                emphasis = if (autoEquipped) 1.3f else 1f,
+                lifetime = 1.4f,
+            )
             CombatEvent.LootTaken(loot.item, autoEquipped)
         }
     }
@@ -599,6 +694,8 @@ class WorldSession(
         isRolling = isRolling,
         isInvulnerable = isInvulnerable,
         rollCooldownFraction = rollCooldownFraction,
+        feedback = feedback,
+        playerFlash = hitFlashes.intensity(PLAYER_ACTOR_ID),
         worldRevision = streamingWorld.loadedChunks.sumOf { it.revision },
         enemies = enemies,
         groundLoot = groundLoot,
@@ -626,6 +723,13 @@ class WorldSession(
         const val ROLL_COOLDOWN = 1.1f
         /** Below this the stick is treated as centred. */
         const val INPUT_DEADZONE = 0.12f
+
+        const val PLAYER_ACTOR_ID = "player"
+        private const val FEEDBACK_HURT = 0xFFD2544BL
+        private const val FEEDBACK_DODGE = 0xFF7FD4E0L
+        private const val FEEDBACK_BLOCKED = 0xFF9A96A8L
+        private const val FEEDBACK_HEAL = 0xFF7BC67EL
+        private const val FEEDBACK_LEVEL = 0xFFFFC107L
         private val SPAWN_CHUNK = com.stratum.core.domain.world.ChunkPos(0, 0)
     }
 }
@@ -648,6 +752,8 @@ data class SessionSnapshot(
     val isRolling: Boolean = false,
     val isInvulnerable: Boolean = false,
     val rollCooldownFraction: Float = 0f,
+    val feedback: List<FeedbackMark> = emptyList(),
+    val playerFlash: Float = 0f,
     /** Changes when any loaded chunk changes, so the renderer knows to redraw. */
     val worldRevision: Int,
     val enemies: List<EnemyInstance> = emptyList(),

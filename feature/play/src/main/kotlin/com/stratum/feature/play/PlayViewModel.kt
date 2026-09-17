@@ -15,6 +15,7 @@ import com.stratum.engine.world.IsometricProjection
 import com.stratum.engine.world.AttackReport
 import com.stratum.engine.world.CombatEvent
 import com.stratum.engine.world.DodgeResult
+import com.stratum.engine.world.FeedbackMark
 import com.stratum.engine.world.GroundLoot
 import com.stratum.engine.world.MineResult
 import com.stratum.engine.world.PlaceRejection
@@ -216,6 +217,9 @@ class PlayViewModel(
             isRolling = snapshot.isRolling,
             isInvulnerable = snapshot.isInvulnerable,
             rollCooldownFraction = snapshot.rollCooldownFraction,
+            feedback = snapshot.feedback,
+            playerFlash = snapshot.playerFlash,
+            flashFor = session::flashFor,
             skills = snapshot.skills,
             frame = _state.value.frame + 1,
             message = message ?: _state.value.message,
@@ -282,6 +286,10 @@ data class PlayUiState(
     val isRolling: Boolean = false,
     val isInvulnerable: Boolean = false,
     val rollCooldownFraction: Float = 0f,
+    val feedback: List<FeedbackMark> = emptyList(),
+    val playerFlash: Float = 0f,
+    /** Per-actor hit flash, read by the renderer for each visible monster. */
+    val flashFor: (String) -> Float = { 0f },
     val skills: List<SkillDefinition> = emptyList(),
     /** Advances every tick so the canvas redraws while the fight is moving. */
     val frame: Int = 0,

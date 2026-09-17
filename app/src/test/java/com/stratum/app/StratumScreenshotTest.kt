@@ -54,6 +54,20 @@ class StratumScreenshotTest {
         // Run the world forward so the shot shows a live fight rather than an
         // empty field: monsters spawn, close in, and chip the player's health.
         repeat(40) { session.tick(0.25f) }
+        // Put monsters in reach and land blows, so the shot shows the
+        // feedback rather than an idle field.
+        // The sturdiest monsters the pack defines, so they survive the blow
+        // and the shot shows a fight rather than three corpses. Engine state is
+        // internal to :engine:world, so this goes through the public spawn API.
+        val sturdy = content.enemies.sortedByDescending { it.baseStats.maxHealth }
+        repeat(3) { i ->
+            session.spawn(
+                sturdy[i % sturdy.size],
+                session.player.position.translated(1f + i * 0.5f, -0.6f + i * 0.6f, 0f),
+            )
+        }
+        session.attack()
+        session.castSkill(content.skills.first().id)
         session.setMoveInput(1f, -0.4f)
         session.dodge()
         session.tick(0.05f)
@@ -85,6 +99,9 @@ class StratumScreenshotTest {
                         isRolling = session.isRolling,
                         isInvulnerable = session.isInvulnerable,
                         rollCooldownFraction = session.rollCooldownFraction,
+                        feedback = session.feedback,
+                        playerFlash = 0.7f,
+                        flashFor = session::flashFor,
                     ),
                     world = session.world,
                     modifier = Modifier.fillMaxSize(),

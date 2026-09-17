@@ -10,6 +10,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import com.stratum.core.domain.actor.EnemyInstance
 import com.stratum.core.domain.world.BlockPos
@@ -17,6 +18,8 @@ import com.stratum.core.domain.world.Direction
 import com.stratum.core.domain.world.Chunk
 import com.stratum.core.domain.world.World
 import com.stratum.core.domain.world.WorldPoint
+import com.stratum.engine.world.FeedbackKind
+import com.stratum.engine.world.FeedbackMark
 import com.stratum.engine.world.GroundLoot
 import com.stratum.engine.world.IsometricProjection
 
@@ -37,6 +40,13 @@ fun WorldCanvas(
     playerAccent: Color = PLAYER_RING,
     enemies: List<EnemyInstance> = emptyList(),
     groundLoot: List<GroundLoot> = emptyList(),
+    feedback: List<FeedbackMark> = emptyList(),
+    /** 0..1, how recently the player was hit. Drives the hurt tint. */
+    playerFlash: Float = 0f,
+    /** Rolling players are drawn flattened and trailing. */
+    isRolling: Boolean = false,
+    isInvulnerable: Boolean = false,
+    flashFor: (String) -> Float = { 0f },
     /** Redrawn whenever this changes; the world itself is mutable and not a Compose state. */
     revision: Int,
     /** Changes every frame while a fight is running, to force a redraw. */
@@ -112,9 +122,19 @@ fun WorldCanvas(
             val y = originY + screen.y
             when (actor) {
                 is Actor.Loot -> drawLoot(x, y, projection, Color(actor.loot.item.rarity.beamColor()))
-                is Actor.Monster -> drawEnemy(x, y, projection, actor.enemy)
-                is Actor.Player -> drawPlayer(x, y, projection, playerFacing, playerAccent)
+                is Actor.Monster -> drawEnemy(x, y, projection, actor.enemy, flashFor(actor.enemy.instanceId))
+                is Actor.Player -> drawPlayer(
+                    x, y, projection, playerFacing, playerAccent,
+                    hurt = playerFlash, rolling = isRolling, invulnerable = isInvulnerable,
+                )
             }
+        }
+
+        // Feedback last and unsorted by depth: a damage number must never be
+        // hidden behind the thing it refers to.
+        feedback.sortedBy { it.id }.forEach { mark ->
+            val screen = projection.project(mark.origin)
+            drawFeedback(originX + screen.x, originY + screen.y, projection, mark)
         }
     }
 }
@@ -143,6 +163,7 @@ private fun DrawScope.drawEnemy(
     y: Float,
     projection: IsometricProjection,
     enemy: EnemyInstance,
+    flash: Float = 0f,
 ) {
     val scale = projection.tileWidth * projection.zoom
     val radius = scale * 0.16f * enemy.rank.sizeMultiplier()
@@ -153,7 +174,16 @@ private fun DrawScope.drawEnemy(
         topLeft = Offset(x - radius, y - radius * 0.5f),
         size = Size(radius * 2f, radius),
     )
-    drawCircle(Color(enemy.bodyColor), radius, Offset(x, y - lift))
+    // Lerping toward white rather than overlaying keeps the silhouette
+    // readable at the moment of impact, which is when it matters most.
+    val body = Color(enemy.bodyColor)
+    val lit = Color(
+        red = body.red + (1f - body.red) * flash,
+        green = body.green + (1f - body.green) * flash,
+        blue = body.blue + (1f - body.blue) * flash,
+        alpha = 1f,
+    )
+    drawCircle(lit, radius * (1f + flash * HIT_SWELL), Offset(x, y - lift))
     drawCircle(
         Color.Black.copy(alpha = 0.5f),
         radius,
@@ -324,6 +354,9 @@ private fun DrawScope.drawPlayer(
     projection: IsometricProjection,
     facing: Direction = Direction.SOUTH,
     accent: Color = PLAYER_RING,
+    hurt: Float = 0f,
+    rolling: Boolean = false,
+    invulnerable: Boolean = false,
 ) {
     val scale = projection.tileWidth * projection.zoom
     val radius = scale * 0.22f
@@ -337,8 +370,27 @@ private fun DrawScope.drawPlayer(
     )
 
     drawCircle(accent.copy(alpha = 0.25f), radius * 1.5f, center)
-    drawCircle(PLAYER_BODY, radius, center)
+
+    // Taking a hit washes the body red; a roll squashes it, which reads as
+    // ducking without needing an animation frame.
+    val body = Color(
+        red = PLAYER_BODY.red + (1f - PLAYER_BODY.red) * 0f + hurt * (1f - PLAYER_BODY.red) * 0f,
+        green = PLAYER_BODY.green * (1f - hurt * 0.55f),
+        blue = PLAYER_BODY.blue * (1f - hurt * 0.55f),
+        alpha = 1f,
+    )
+    val squash = if (rolling) ROLL_SQUASH else 1f
+    drawOval(
+        color = body,
+        topLeft = Offset(center.x - radius, center.y - radius * squash),
+        size = Size(radius * 2f, radius * 2f * squash),
+    )
     drawCircle(PLAYER_EDGE, radius, center, style = Stroke(2.5f))
+
+    // An i-frame ring: the player needs to know the window is still open.
+    if (invulnerable) {
+        drawCircle(INVULNERABLE_RING, radius * 1.9f, center, style = Stroke(3f))
+    }
     drawCircle(accent, radius * 1.5f, center, style = Stroke(2f))
 
     // Facing wedge, projected onto the isometric axes so "east" points where
@@ -364,6 +416,57 @@ private fun DrawScope.drawPlayer(
     drawPath(wedge, accent)
 }
 
+/**
+ * One floating mark: rises, drifts and fades over its lifetime.
+ *
+ * Drawn with a dark backing pass so a number stays readable over pale terrain
+ * without needing a panel behind it.
+ */
+private fun DrawScope.drawFeedback(
+    x: Float,
+    y: Float,
+    projection: IsometricProjection,
+    mark: FeedbackMark,
+) {
+    val progress = mark.progress
+    val scale = projection.tileWidth * projection.zoom
+
+    // Ease out: fast at the moment of the hit, settling as it fades.
+    val rise = (1f - (1f - progress) * (1f - progress)) * scale * RISE_FRACTION
+    val alpha = (1f - progress * progress).coerceIn(0f, 1f)
+    val size = scale * BASE_TEXT_FRACTION * mark.emphasis
+
+    // Marks born in the same instant would otherwise stack pixel-perfect and
+    // read as one number. Spread them by id: deterministic, so a replay draws
+    // the same frame, and enough to separate a nova's worth of hits.
+    val spread = ((mark.id % SPREAD_BUCKETS) - SPREAD_BUCKETS / 2) * scale * SPREAD_FRACTION
+    val cx = x + spread
+    val cy = y - scale * 0.5f - rise - (mark.id % 3) * scale * 0.06f
+
+    drawContext.canvas.nativeCanvas.apply {
+        val paint = android.graphics.Paint().apply {
+            isAntiAlias = true
+            textAlign = android.graphics.Paint.Align.CENTER
+            textSize = size
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+        paint.color = android.graphics.Color.argb((alpha * 200).toInt().coerceIn(0, 255), 0, 0, 0)
+        paint.style = android.graphics.Paint.Style.STROKE
+        paint.strokeWidth = size * 0.16f
+        drawText(mark.text, cx, cy, paint)
+
+        val base = mark.color.toInt()
+        paint.style = android.graphics.Paint.Style.FILL
+        paint.color = android.graphics.Color.argb(
+            (alpha * 255).toInt().coerceIn(0, 255),
+            android.graphics.Color.red(base),
+            android.graphics.Color.green(base),
+            android.graphics.Color.blue(base),
+        )
+        drawText(mark.text, cx, cy, paint)
+    }
+}
+
 private fun Color.scaleRgb(factor: Float) = Color(
     red = (red * factor).coerceIn(0f, 1f),
     green = (green * factor).coerceIn(0f, 1f),
@@ -375,6 +478,13 @@ private fun Color.scaleRgb(factor: Float) = Color(
 private const val LEFT_FACE_SHADE = 0.72f
 private const val RIGHT_FACE_SHADE = 0.52f
 private const val VISIBLE_DEPTH = 6
+private const val HIT_SWELL = 0.18f
+private const val ROLL_SQUASH = 0.62f
+private const val RISE_FRACTION = 0.85f
+private const val BASE_TEXT_FRACTION = 0.26f
+private const val SPREAD_BUCKETS = 5
+private const val SPREAD_FRACTION = 0.16f
+private val INVULNERABLE_RING = Color(0xFF7FD4E0)
 internal val PLAYER_BODY = Color(0xFFF4EBDC)
 internal val PLAYER_EDGE = Color(0xFF14110E)
 internal val PLAYER_RING = Color(0xFFCD7F32)
