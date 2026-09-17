@@ -220,10 +220,12 @@ class LayeredTerrainGenerator(
             val roll = PositionalRandom.floatAt(config.seed, worldX, worldY, SCATTER_SALT + ruleIndex)
             if (roll >= rule.chance) return@forEachIndexed
             val index = registry.indexOf(rule.blockId)
+            val cap = rule.capBlockId?.let(registry::indexOrNull)
             for (offset in 1..rule.height) {
                 val z = surfaceZ + offset
                 if (z >= Chunk.HEIGHT) break
-                chunk.setBlock(localX, localY, z, index)
+                val isTop = offset == rule.height
+                chunk.setBlock(localX, localY, z, if (isTop && cap != null) cap else index)
             }
         }
     }

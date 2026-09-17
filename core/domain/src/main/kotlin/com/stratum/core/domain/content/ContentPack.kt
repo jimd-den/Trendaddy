@@ -110,6 +110,14 @@ data class ScatterRule(
     val chance: Float,
     /** Stacked height, so a 4 makes a tree trunk rather than a shrub. */
     val height: Int = 1,
+    /**
+     * Placed on top of the stack instead of one more [blockId].
+     *
+     * This is what makes a tree a tree: three trunk blocks and a canopy, rather
+     * than a four-block pillar of bark that the renderer has no way to tell
+     * apart from a post.
+     */
+    val capBlockId: String? = null,
 )
 
 data class DepositRule(

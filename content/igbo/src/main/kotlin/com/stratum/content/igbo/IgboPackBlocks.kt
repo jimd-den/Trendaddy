@@ -89,6 +89,7 @@ internal object IgboPackBlocks {
     val bronzeOre = BlockType(
         id = "$NS:bronze_ore",
         displayName = "Bronze Ore",
+        glyph = "🔶",
         material = BlockMaterial.ORE,
         hardness = 3.5f,
         requiredTier = 1,
@@ -101,6 +102,7 @@ internal object IgboPackBlocks {
     val ironOre = BlockType(
         id = "$NS:iron_ore",
         displayName = "Bog Iron",
+        glyph = "⚫\uFE0F",
         material = BlockMaterial.ORE,
         hardness = 3f,
         requiredTier = 1,
@@ -113,6 +115,7 @@ internal object IgboPackBlocks {
     val stormCrystal = BlockType(
         id = "$NS:storm_crystal",
         displayName = "Amadioha Crystal",
+        glyph = "💎",
         material = BlockMaterial.ORE,
         hardness = 6f,
         requiredTier = 3,
@@ -134,6 +137,7 @@ internal object IgboPackBlocks {
     val irokoCanopy = BlockType(
         id = "$NS:iroko_canopy",
         displayName = "Iroko Canopy",
+        glyph = "🌳",
         material = BlockMaterial.FOLIAGE,
         hardness = 0.3f,
         isOpaque = false,
@@ -144,6 +148,7 @@ internal object IgboPackBlocks {
     val palmReed = BlockType(
         id = "$NS:palm_reed",
         displayName = "Raffia Reed",
+        glyph = "🌾",
         material = BlockMaterial.FOLIAGE,
         hardness = 0.2f,
         isSolid = false,
@@ -156,6 +161,7 @@ internal object IgboPackBlocks {
     val spiritWater = BlockType(
         id = "$NS:spirit_water",
         displayName = "Spirit Water",
+        glyph = "🌊",
         material = BlockMaterial.LIQUID,
         hardness = BlockType.UNBREAKABLE,
         isSolid = false,
@@ -168,6 +174,7 @@ internal object IgboPackBlocks {
     val bronzeBrazier = BlockType(
         id = "$NS:bronze_brazier",
         displayName = "Bronze Brazier",
+        glyph = "🔥",
         material = BlockMaterial.METAL,
         hardness = 1.5f,
         isSolid = false,

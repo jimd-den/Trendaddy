@@ -133,6 +133,7 @@ fun PlayScreenContent(
                 groundLoot = state.groundLoot,
                 groundInserts = state.groundInserts,
                 insertColor = { state.insertOrNull(it)?.color },
+                insertGlyph = { state.insertOrNull(it)?.glyph },
                 feedback = state.feedback,
                 playerFlash = state.playerFlash,
                 isRolling = state.isRolling,
@@ -549,8 +550,11 @@ private fun Hotbar(
     ) {
         itemsIndexed(state.player.hotbar) { index, blockId ->
             val type = world.registry.indexOrNull(blockId)?.let(world.registry::typeOf)
+            // The same glyph the block wears in the world, so what you are
+            // holding and what you are about to place are visibly one thing.
+            val mark = type?.glyph?.let { "$it " }.orEmpty()
             StratumChip(
-                label = "${type?.displayName ?: blockId} ${state.player.countOf(blockId)}",
+                label = "$mark${type?.displayName ?: blockId} ${state.player.countOf(blockId)}",
                 selected = index == state.player.selectedSlot,
                 onClick = { onSelectSlot(index) },
                 swatch = type?.let { Color(it.topColor) },

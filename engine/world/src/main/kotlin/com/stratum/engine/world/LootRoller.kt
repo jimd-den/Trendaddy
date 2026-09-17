@@ -63,6 +63,7 @@ class LootRoller(
             // Sockets drop empty. The weapon is the frame; what it does is the
             // player's to decide, and that decision should survive the drop.
             sockets = SocketSet.of(SocketSet.rolledFor(rarity)),
+            glyph = base.glyph,
         )
     }
 
@@ -94,6 +95,7 @@ class LootRoller(
             baseArmour = base.armour,
             affixes = rolled,
             sockets = SocketSet.of(SocketSet.rolledFor(rarity)),
+            glyph = base.glyph,
         )
     }
 

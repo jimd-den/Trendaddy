@@ -25,6 +25,18 @@ data class BlockType(
     val lightEmission: Int = 0,
     /** What ends up in the bag. Null means the block drops itself. */
     val dropId: String? = null,
+    /**
+     * Drawn as this glyph instead of a cube.
+     *
+     * A tree rendered as stacked brown boxes is a brown box; rendered as 🌲 it
+     * is a tree, and a player can tell at a glance whether a thing is scenery,
+     * a resource or a hazard. Props opt in — terrain stays voxels, because the
+     * depth and material grammar is the point of the terrain.
+     *
+     * One glyph is drawn per column, at the top of the run, so a four-block
+     * trunk is one tree rather than four.
+     */
+    val glyph: String? = null,
     /** Renderer hints. Packs own these so a pack can restyle the world wholesale. */
     val topColor: Long = 0xFF9E9E9E,
     val sideColor: Long = 0xFF6E6E6E,
