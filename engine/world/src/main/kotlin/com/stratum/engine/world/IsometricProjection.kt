@@ -138,6 +138,43 @@ data class IsometricProjection(
         )
     }
 
+    /**
+     * Whether a column's drawn band touches the viewport at all.
+     *
+     * [visibleRange] has to assume a column could be as tall as the world, so it
+     * returns a generous box — on a phone that is an order of magnitude more
+     * columns than the screen can show. This is the exact test, applied per
+     * column once its real height is known, and it is what keeps the draw loop
+     * proportional to what is on screen rather than to what is loaded.
+     *
+     * [topZ] is the column's surface; [bottomZ] the lowest level the renderer
+     * will draw for it.
+     */
+    fun isColumnOnScreen(
+        x: Int,
+        y: Int,
+        topZ: Int,
+        bottomZ: Int,
+        originX: Float,
+        originY: Float,
+        viewportWidth: Float,
+        viewportHeight: Float,
+    ): Boolean {
+        // Horizontal position does not depend on z, so this half is exact and
+        // costs nothing: it is the same test whatever height the column is.
+        val centreX = originX + (x - y) * halfWidth
+        if (centreX + halfWidth < 0f || centreX - halfWidth > viewportWidth) return false
+
+        val topY = originY + (x + y) * halfHeight - topZ * liftPerLevel
+        // The band runs from the top face's upper tip down past the lowest
+        // block's base, which sits a block-height below its own centre.
+        val bottomY = originY + (x + y) * halfHeight - bottomZ * liftPerLevel +
+            halfHeight + liftPerLevel
+        if (bottomY < 0f || topY - halfHeight > viewportHeight) return false
+
+        return true
+    }
+
     private companion object {
         /** One block of slack so geometry straddling the edge is not popped away. */
         const val EDGE_PADDING = 1

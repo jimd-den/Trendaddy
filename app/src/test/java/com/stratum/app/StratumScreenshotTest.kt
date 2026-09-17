@@ -197,6 +197,52 @@ class StratumScreenshotTest {
     }
 
     @Test
+    fun death_screen() {
+        val content = GameSetup.assemble()
+        val session = WorldSession(content, WorldConfig(seed = 99L, simulationRadius = 2))
+        repeat(20) { session.tick(0.2f) }
+        while (session.player.isAlive) session.hurtPlayer(50)
+
+        composeTestRule.setContent {
+            StratumTheme(palette = content.palette, darkTheme = true) {
+                PlayScreenContent(
+                    state = PlayUiState(
+                        player = session.player,
+                        camera = session.player.position,
+                        projection = IsometricProjection(zoom = 1f),
+                        palette = content.palette,
+                        biomeName = session.currentBiome.name,
+                        enemies = session.enemies,
+                        skills = session.skills,
+                    ),
+                    world = session.world,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        composeTestRule.onRoot().captureRoboImage(filePath = "src/test/screenshots/death.png")
+    }
+
+    @Test
+    fun provider_settings_screen() {
+        composeTestRule.setContent {
+            StratumTheme(palette = IgboContentPack.palette, darkTheme = true) {
+                ProviderSettingsScreen(
+                    initial = com.stratum.core.data.ai.ProviderConfig(
+                        apiKey = "sk-or-v1-not-a-real-key",
+                        model = "anthropic/claude-sonnet-4",
+                        imageModel = "black-forest-labs/flux-1.1-pro",
+                    ),
+                    onSave = {},
+                    onBack = {},
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        composeTestRule.onRoot().captureRoboImage(filePath = "src/test/screenshots/settings.png")
+    }
+
+    @Test
     fun class_forge_screen() {
         val content = GameSetup.assemble()
 

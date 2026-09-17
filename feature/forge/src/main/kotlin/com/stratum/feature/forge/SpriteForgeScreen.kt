@@ -18,6 +18,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,6 +55,11 @@ fun SpriteForgeScreen(
     onOpenSettings: () -> Unit = {},
     previewFor: (String) -> ImageBitmap? = { null },
 ) {
+    // Re-read the provider on every visit. The view model outlives this screen,
+    // so without this a key saved in settings a moment ago is still reported as
+    // missing until the app is restarted.
+    LaunchedEffect(Unit) { viewModel.refresh() }
+
     val state by viewModel.state.collectAsStateWithLifecycle()
     SpriteForgeContent(
         state = state,

@@ -30,13 +30,14 @@ import com.stratum.engine.world.SocketResult
 import com.stratum.engine.world.MineResult
 import com.stratum.engine.world.PlaceRejection
 import com.stratum.engine.world.PlaceResult
+import com.stratum.engine.world.ReviveResult
 import com.stratum.engine.world.WorldSession
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.android.awaitFrame
 
 /**
  * Drives one play session.
@@ -46,9 +47,9 @@ import kotlinx.coroutines.delay
  * they can be tested without Android.
  */
 class PlayViewModel(
-    content: AssembledContent,
-    config: WorldConfig,
-    heroClassId: String? = null,
+    private val content: AssembledContent,
+    private val config: WorldConfig,
+    private val heroClassId: String? = null,
     /**
      * Resolves an actor to drawable art. Supplied by the composition root,
      * because decoding a bitmap is a platform concern and this view model is
@@ -57,7 +58,12 @@ class PlayViewModel(
     private val spriteResolver: (SpriteKey) -> DrawableSprite? = { null },
 ) : ViewModel() {
 
-    private val session = WorldSession(content, config, heroClassId)
+    /**
+     * Replaced wholesale by [newRun]. Every reader goes through this field
+     * rather than capturing it, so starting a fresh world cannot leave a lambda
+     * pointing at the world the player just left.
+     */
+    private var session = WorldSession(content, config, heroClassId)
 
     private val _state = MutableStateFlow(initialState(content))
     val state: StateFlow<PlayUiState> = _state.asStateFlow()
@@ -67,6 +73,21 @@ class PlayViewModel(
     private var miningJob: kotlinx.coroutines.Job? = null
     private var loopJob: kotlinx.coroutines.Job? = null
 
+    /**
+     * Held as fields rather than written inline in [publish].
+     *
+     * A method reference allocates a new object each time it is evaluated, so
+     * writing `session::flashFor` into the state every tick made the state
+     * unequal to its predecessor no matter what else had changed — and the whole
+     * HUD recomposed twenty times a second for nothing.
+     */
+    private val flashFor: (String) -> Float = { id -> session.flashFor(id) }
+    private val animationFor: (String) -> AnimationPlayback = { id -> session.animationFor(id) }
+    private val insertFor: (String) -> com.stratum.core.domain.item.InsertDefinition? =
+        { id -> session.insertOrNull(id) }
+    private val rarityColors: (com.stratum.core.domain.item.ItemRarity) -> Long =
+        { rarity -> session.content.rarityColor(rarity) }
+
     init {
         publish()
         startLoop()
@@ -74,20 +95,36 @@ class PlayViewModel(
 
     /**
      * The game loop. Monsters only move because something advances them, so the
-     * world is simulated on a fixed cadence rather than only when the player
-     * touches the screen.
+     * world is simulated whether or not the player touches the screen.
+     *
+     * Paced by the display rather than by a timer. A fixed 50ms sleep capped the
+     * whole game at twenty frames a second on a panel perfectly capable of
+     * ninety, and it lied about how much time had passed: the world advanced by
+     * exactly 50ms whether the frame took 10ms or 200.
+     *
+     * The step is the real elapsed time, clamped. Clamping means a stall makes
+     * the world run slow for a moment rather than teleporting the player through
+     * a wall — falling behind is recoverable, tunnelling is not.
      */
     private fun startLoop() {
         loopJob?.cancel()
         loopJob = viewModelScope.launch {
+            var previousFrame = 0L
             while (isActive) {
-                val events = session.tick(TICK_SECONDS)
+                val now = awaitFrame()
+                val delta = if (previousFrame == 0L) {
+                    MIN_STEP
+                } else {
+                    ((now - previousFrame) / NANOS_PER_SECOND).coerceIn(MIN_STEP, MAX_STEP)
+                }
+                previousFrame = now
+
+                val events = session.tick(delta)
                 if (events.isEmpty()) {
                     publish()
                 } else {
                     publish(message = events.firstOrNull()?.let(::describe))
                 }
-                delay(TICK_MILLIS)
             }
         }
     }
@@ -103,6 +140,41 @@ class PlayViewModel(
         // would drown out the messages that are not.
         is CombatEvent.PlayerHurt -> null
         is CombatEvent.InsertTaken -> "Picked up ${event.insert.name}"
+    }
+
+    // ---- dying -----------------------------------------------------------
+
+    /**
+     * Gets back up in the same world, keeping the character and everything on
+     * it. The engine decides what that costs.
+     */
+    fun revive() {
+        when (val result = session.revive()) {
+            is ReviveResult.Revived -> publish(
+                message = if (result.experienceLost > 0) {
+                    "You rise. ${result.experienceLost} experience stayed behind."
+                } else {
+                    "You rise."
+                },
+            )
+            ReviveResult.StillStanding -> publish()
+        }
+    }
+
+    /**
+     * Throws the world away and starts another, with the same class and a new
+     * seed. Everything the character had goes with it — that is the difference
+     * between this and [revive].
+     */
+    fun newRun() {
+        miningJob?.cancel()
+        loopJob?.cancel()
+        session = WorldSession(content, config.copy(seed = System.nanoTime()), heroClassId)
+        // The panels belong to the run that just ended; a fresh world opens on
+        // the world, not on someone else's bag.
+        _state.value = initialState(content)
+        publish(message = "A new world.")
+        startLoop()
     }
 
     // ---- the satchel -----------------------------------------------------
@@ -214,8 +286,20 @@ class PlayViewModel(
         miningJob?.cancel()
         session.cancelMining()
         miningJob = viewModelScope.launch {
+            // Frame paced like the world loop, and for the same reason: a block's
+            // hardness is stated in seconds, so effort has to accumulate in real
+            // seconds rather than in however often a timer happened to fire.
+            var previousFrame = 0L
             while (isActive) {
-                when (val result = session.mine(target, TICK_SECONDS)) {
+                val now = awaitFrame()
+                val delta = if (previousFrame == 0L) {
+                    MIN_STEP
+                } else {
+                    ((now - previousFrame) / NANOS_PER_SECOND).coerceIn(MIN_STEP, MAX_STEP)
+                }
+                previousFrame = now
+
+                when (val result = session.mine(target, delta)) {
                     is MineResult.Broken -> {
                         publish(message = "Recovered ${displayName(result.drop)}")
                         return@launch
@@ -226,7 +310,6 @@ class PlayViewModel(
                     }
                     is MineResult.InProgress -> publish()
                 }
-                delay(TICK_MILLIS)
             }
         }
     }
@@ -332,16 +415,16 @@ class PlayViewModel(
             groundLoot = snapshot.groundLoot,
             groundInserts = snapshot.groundInserts,
             heldInserts = snapshot.heldInserts,
-            insertFor = session::insertOrNull,
-            rarityColors = session.content::rarityColor,
+            insertFor = insertFor,
+            rarityColors = rarityColors,
             isRolling = snapshot.isRolling,
             isInvulnerable = snapshot.isInvulnerable,
             rollCooldownFraction = snapshot.rollCooldownFraction,
             feedback = snapshot.feedback,
             playerFlash = snapshot.playerFlash,
-            flashFor = session::flashFor,
+            flashFor = flashFor,
             playerAnimation = snapshot.playerAnimation,
-            animationFor = session::animationFor,
+            animationFor = animationFor,
             spriteFor = spriteResolver,
             buildPreview = snapshot.buildPreview,
             buildTool = snapshot.buildTool,
@@ -379,8 +462,11 @@ class PlayViewModel(
     }
 
     companion object {
-        private const val TICK_SECONDS = 0.05f
-        private const val TICK_MILLIS = 50L
+        private const val NANOS_PER_SECOND = 1_000_000_000f
+        /** Below this a step is noise; it also covers the very first frame. */
+        private const val MIN_STEP = 1f / 240f
+        /** A frame longer than this is a stall, and is served in slow motion. */
+        private const val MAX_STEP = 1f / 15f
         private const val MIN_ZOOM = 0.6f
         private const val MAX_ZOOM = 2.2f
 

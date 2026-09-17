@@ -83,7 +83,7 @@ fun WorldCanvas(
 ) {
     Canvas(
         modifier = modifier
-            .pointerInput(buildMode, projection, revision) {
+            .pointerInput(buildMode, projection, revision, world) {
                 if (!buildMode) return@pointerInput
                 // Build drags are their own gesture: mining and building share a
                 // surface, and a drag that both dug and built would be unusable.
@@ -108,7 +108,7 @@ fun WorldCanvas(
                     onDragCancel = { anchor = null },
                 )
             }
-            .pointerInput(projection, revision) {
+            .pointerInput(projection, revision, world) {
             detectTapGestures(
                 onTap = { offset ->
                     pick(world, projection, camera, size.width.toFloat(), size.height.toFloat(), offset)
@@ -131,6 +131,11 @@ fun WorldCanvas(
 
         val range = projection.visibleRange(size.width, size.height, originX, originY)
 
+        // Allocated once and rewound per block. A path per face per block per
+        // frame was tens of thousands of short-lived objects a second, and the
+        // collector spent more time on them than the renderer did drawing.
+        val faces = BlockFaces()
+
         range.forEachColumnInDrawOrder { x, y ->
             val surface = world.surfaceAt(x, y)
             if (surface < 0) return@forEachColumnInDrawOrder
@@ -138,6 +143,17 @@ fun WorldCanvas(
             // Draw a few levels below the surface so cliff faces have sides
             // rather than floating tops.
             val floor = maxOf(0, surface - VISIBLE_DEPTH)
+
+            // The range is a generous box; this is the exact test. Without it
+            // every loaded column is drawn, on screen or not.
+            if (!projection.isColumnOnScreen(
+                    x, y, surface, floor,
+                    originX, originY, size.width, size.height,
+                )
+            ) {
+                return@forEachColumnInDrawOrder
+            }
+
             for (z in floor..surface) {
                 val pos = BlockPos(x, y, z)
                 val block = world.blockAt(pos)
@@ -155,6 +171,7 @@ fun WorldCanvas(
                     sideColor = Color(block.sideColor),
                     highlighted = pos == highlight,
                     accent = Color(block.accentColor),
+                    faces = faces,
                 )
             }
         }
@@ -549,42 +566,58 @@ private fun DrawScope.drawBlock(
     sideColor: Color,
     accent: Color,
     highlighted: Boolean,
+    faces: BlockFaces,
 ) {
     val halfWidth = projection.tileWidth * projection.zoom / 2f
     val halfHeight = projection.tileHeight * projection.zoom / 2f
     val lift = projection.blockHeight * projection.zoom
 
-    val top = Path().apply {
-        moveTo(centerX, centerY - halfHeight)
-        lineTo(centerX + halfWidth, centerY)
-        lineTo(centerX, centerY + halfHeight)
-        lineTo(centerX - halfWidth, centerY)
-        close()
-    }
+    faces.shapeFor(centerX, centerY, halfWidth, halfHeight, lift)
 
-    val leftFace = Path().apply {
-        moveTo(centerX - halfWidth, centerY)
-        lineTo(centerX, centerY + halfHeight)
-        lineTo(centerX, centerY + halfHeight + lift)
-        lineTo(centerX - halfWidth, centerY + lift)
-        close()
-    }
-
-    val rightFace = Path().apply {
-        moveTo(centerX + halfWidth, centerY)
-        lineTo(centerX, centerY + halfHeight)
-        lineTo(centerX, centerY + halfHeight + lift)
-        lineTo(centerX + halfWidth, centerY + lift)
-        close()
-    }
-
-    drawPath(leftFace, sideColor.scaleRgb(LEFT_FACE_SHADE))
-    drawPath(rightFace, sideColor.scaleRgb(RIGHT_FACE_SHADE))
-    drawPath(top, topColor)
+    drawPath(faces.left, sideColor.scaleRgb(LEFT_FACE_SHADE))
+    drawPath(faces.right, sideColor.scaleRgb(RIGHT_FACE_SHADE))
+    drawPath(faces.top, topColor)
 
     if (highlighted) {
-        drawPath(top, accent.copy(alpha = 0.35f))
-        drawPath(top, accent, style = Stroke(width = 2f))
+        drawPath(faces.top, accent.copy(alpha = 0.35f))
+        drawPath(faces.top, accent, style = Stroke(width = 2f))
+    }
+}
+
+/**
+ * The three faces of a block, reused across every block in a frame.
+ *
+ * A block is always the same six-sided shape in a different place, so the paths
+ * are rewound and refilled rather than rebuilt. At a thousand-odd blocks a frame
+ * and sixty frames a second, allocating them was the single largest source of
+ * garbage in the app.
+ */
+private class BlockFaces {
+    val top = Path()
+    val left = Path()
+    val right = Path()
+
+    fun shapeFor(cx: Float, cy: Float, halfWidth: Float, halfHeight: Float, lift: Float) {
+        top.rewind()
+        top.moveTo(cx, cy - halfHeight)
+        top.lineTo(cx + halfWidth, cy)
+        top.lineTo(cx, cy + halfHeight)
+        top.lineTo(cx - halfWidth, cy)
+        top.close()
+
+        left.rewind()
+        left.moveTo(cx - halfWidth, cy)
+        left.lineTo(cx, cy + halfHeight)
+        left.lineTo(cx, cy + halfHeight + lift)
+        left.lineTo(cx - halfWidth, cy + lift)
+        left.close()
+
+        right.rewind()
+        right.moveTo(cx + halfWidth, cy)
+        right.lineTo(cx, cy + halfHeight)
+        right.lineTo(cx, cy + halfHeight + lift)
+        right.lineTo(cx + halfWidth, cy + lift)
+        right.close()
     }
 }
 

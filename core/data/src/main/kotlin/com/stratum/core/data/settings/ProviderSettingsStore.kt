@@ -19,6 +19,11 @@ class ProviderSettingsStore(context: Context) {
     fun load(): ProviderConfig = ProviderConfig(
         apiKey = prefs.getString(KEY_API, "").orEmpty(),
         model = prefs.getString(KEY_MODEL, DEFAULT_MODEL).orEmpty().ifBlank { DEFAULT_MODEL },
+        // Stored separately from [model]. It was not stored at all before, which
+        // meant every sprite sheet was drawn by whichever model happened to be
+        // the default no matter what the player had chosen.
+        imageModel = prefs.getString(KEY_IMAGE_MODEL, DEFAULT_IMAGE_MODEL)
+            .orEmpty().ifBlank { DEFAULT_IMAGE_MODEL },
         baseUrl = prefs.getString(KEY_BASE_URL, DEFAULT_BASE_URL).orEmpty().ifBlank { DEFAULT_BASE_URL },
     )
 
@@ -26,6 +31,7 @@ class ProviderSettingsStore(context: Context) {
         prefs.edit {
             putString(KEY_API, config.apiKey)
             putString(KEY_MODEL, config.model)
+            putString(KEY_IMAGE_MODEL, config.imageModel)
             putString(KEY_BASE_URL, config.baseUrl)
         }
     }
@@ -36,8 +42,10 @@ class ProviderSettingsStore(context: Context) {
         const val FILE = "stratum_provider_settings"
         const val KEY_API = "api_key"
         const val KEY_MODEL = "model"
+        const val KEY_IMAGE_MODEL = "image_model"
         const val KEY_BASE_URL = "base_url"
         const val DEFAULT_MODEL = "google/gemini-2.0-flash-exp:free"
+        const val DEFAULT_IMAGE_MODEL = "google/gemini-2.5-flash-image"
         const val DEFAULT_BASE_URL = "https://openrouter.ai/api/v1/"
     }
 }

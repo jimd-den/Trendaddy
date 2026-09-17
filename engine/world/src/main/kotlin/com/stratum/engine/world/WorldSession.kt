@@ -21,6 +21,7 @@ import com.stratum.core.domain.world.WorldConfig
 import com.stratum.core.domain.world.WorldPoint
 import kotlin.math.abs
 import kotlin.math.floor
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 import kotlin.random.Random
 
@@ -746,6 +747,51 @@ class WorldSession(
         groundInserts = groundInserts + GroundInsert(insertId, position)
     }
 
+    /**
+     * Gets the player back on their feet after dying, in the same world.
+     *
+     * Death costs progress toward the current level, not the level itself, and
+     * never the gear: losing a weapon you spent an hour socketing to a mistimed
+     * roll is how people stop playing. What it does cost is the walk back — you
+     * return to the spawn point, and whatever killed you is still out there.
+     */
+    fun revive(): ReviveResult {
+        if (player.isAlive) return ReviveResult.StillStanding
+
+        val lost = (player.experience * EXPERIENCE_LOST_ON_DEATH).roundToInt()
+        player = player.copy(
+            position = findSpawn(),
+            experience = (player.experience - lost).coerceAtLeast(0),
+            attackCooldown = 0f,
+            cooldowns = com.stratum.core.domain.actor.SkillCooldowns(),
+        )
+        player = player.copy(
+            health = player.maxHealthWith(::insertOrNull),
+            resource = player.maxResource,
+        )
+
+        // The run starts clean: no leftover roll, no stale numbers floating over
+        // a corpse that is no longer there.
+        moveInput = WorldPoint.ZERO
+        rollRemaining = 0f
+        invulnerableFor = 0f
+        rollCooldown = 0f
+        miningTarget = null
+        miningProgress = 0f
+        feedbackLog.clear()
+        hitFlashes.clear()
+        attackHolds.clear()
+        playbacks.clear()
+
+        // Monsters that had cornered the player do not get to greet them at the
+        // spawn point; the director refills the world soon enough.
+        enemies = enemies.filter {
+            it.position.horizontalDistanceTo(player.position) > REVIVE_CLEAR_RADIUS
+        }
+        events = emptyList()
+        return ReviveResult.Revived(experienceLost = lost)
+    }
+
     // ---- the satchel -----------------------------------------------------
 
     /**
@@ -1039,6 +1085,10 @@ class WorldSession(
         const val INSERT_DROP_CHANCE = 0.22f
         /** Far enough that a discard is not undone by the next tick. */
         const val DISCARD_STEP = 2f
+        /** Death costs progress toward this level, never a level and never gear. */
+        const val EXPERIENCE_LOST_ON_DEATH = 0.25f
+        /** Monsters this close to the spawn point are cleared on a revive. */
+        const val REVIVE_CLEAR_RADIUS = 8f
         const val DEFAULT_DAMAGE_TYPE = "stratum:physical"
 
         /** Blocks per second at full stick deflection. */
@@ -1128,6 +1178,14 @@ data class GroundInsert(val insertId: String, val position: WorldPoint)
 
 /** An insert in the pouch, with how many of it the player holds. */
 data class HeldInsert(val definition: InsertDefinition, val count: Int)
+
+/** What getting back up did. */
+sealed interface ReviveResult {
+    data class Revived(val experienceLost: Int) : ReviveResult
+
+    /** Asked to revive someone who never died. */
+    data object StillStanding : ReviveResult
+}
 
 /** What changing gear did. */
 sealed interface EquipResult {

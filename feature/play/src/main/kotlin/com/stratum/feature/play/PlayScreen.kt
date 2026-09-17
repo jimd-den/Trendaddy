@@ -22,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.stratum.core.designsystem.component.ActionEmphasis
@@ -73,6 +74,8 @@ fun PlayScreen(
         onStopMining = viewModel::stopMining,
         onAttack = viewModel::attack,
         onCastSkill = viewModel::castSkill,
+        onRevive = viewModel::revive,
+        onNewRun = viewModel::newRun,
         onToggleSatchel = viewModel::toggleSatchel,
         onEquip = viewModel::equip,
         onDiscard = viewModel::discard,
@@ -103,6 +106,8 @@ fun PlayScreenContent(
     onStopMining: () -> Unit = {},
     onAttack: () -> Unit = {},
     onCastSkill: (String) -> Unit = {},
+    onRevive: () -> Unit = {},
+    onNewRun: () -> Unit = {},
     onToggleSatchel: () -> Unit = {},
     onEquip: (String) -> Unit = {},
     onDiscard: (String) -> Unit = {},
@@ -219,7 +224,9 @@ fun PlayScreenContent(
                     contentAlignment = Alignment.Center,
                 ) {
                     Column(
-                        modifier = Modifier.safeContent(),
+                        modifier = Modifier
+                            .safeContent()
+                            .padding(horizontal = Space.large),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Text(
@@ -234,11 +241,35 @@ fun PlayScreenContent(
                             color = colors.inkMuted,
                         )
                         Spacer(Modifier.height(Space.large))
+                        // Getting back up is the primary action. Being sent to
+                        // a menu to restart is the part that makes people put a
+                        // game down rather than try the fight again.
                         StratumAction(
-                            label = "Return",
-                            onClick = onOpenMenu,
+                            label = "Rise",
+                            onClick = onRevive,
                             emphasis = ActionEmphasis.PRIMARY,
                         )
+                        Spacer(Modifier.height(Space.tight))
+                        Text(
+                            text = "Keep everything. Lose a quarter of the way to your " +
+                                "next level, and walk back.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.inkMuted,
+                            textAlign = TextAlign.Center,
+                        )
+                        Spacer(Modifier.height(Space.medium))
+                        Row(horizontalArrangement = Arrangement.spacedBy(Space.small)) {
+                            StratumAction(
+                                label = "New run",
+                                onClick = onNewRun,
+                                emphasis = ActionEmphasis.SECONDARY,
+                            )
+                            StratumAction(
+                                label = "Menu",
+                                onClick = onOpenMenu,
+                                emphasis = ActionEmphasis.QUIET,
+                            )
+                        }
                     }
                 }
             }

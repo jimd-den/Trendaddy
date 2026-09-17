@@ -19,6 +19,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -50,6 +51,11 @@ fun ForgeScreen(
     onBack: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
 ) {
+    // Re-read the provider on every visit. The view model outlives this screen,
+    // so without this a key saved in settings a moment ago is still reported as
+    // missing until the app is restarted.
+    LaunchedEffect(Unit) { viewModel.refreshProviderStatus() }
+
     val state by viewModel.state.collectAsStateWithLifecycle()
     ForgeScreenContent(
         state = state,
