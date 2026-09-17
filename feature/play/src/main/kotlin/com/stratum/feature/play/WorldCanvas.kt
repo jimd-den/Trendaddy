@@ -129,6 +129,11 @@ fun WorldCanvas(
         val originX = size.width / 2f - projection.project(camera).x
         val originY = size.height / 2f - projection.project(camera).y
 
+        // Ground at the player's own height is fully lit; everything lower is
+        // shaded towards it, so depth reads relative to where you are standing
+        // rather than to an absolute sea level you cannot see.
+        val eyeLevel = kotlin.math.floor(camera.z).toInt()
+
         val range = projection.visibleRange(size.width, size.height, originX, originY)
 
         // Allocated once and rewound per block. A path per face per block per
@@ -154,6 +159,21 @@ fun WorldCanvas(
                 return@forEachColumnInDrawOrder
             }
 
+            // How far below the player this column sits. Lower ground is drawn
+            // darker, which is the whole of "am I down a level" — without it an
+            // isometric field of one material reads as a flat UI background no
+            // matter how much geometry is in it.
+            val depthBelow = (eyeLevel - surface).coerceIn(0, DEPTH_SHADE_RANGE)
+            val depthShade = 1f - depthBelow.toFloat() / DEPTH_SHADE_RANGE * DEPTH_SHADE_STRENGTH
+
+            // A ledge casts onto the cell in front of it. Two heightmap lookups,
+            // and it is what turns a plateau edge into something you can see.
+            val shadowed = world.surfaceAt(x - 1, y) > surface || world.surfaceAt(x, y - 1) > surface
+
+            // Deterministic per-cell jitter. A large plain of one block is
+            // perfectly uniform otherwise, which reads as paper, not ground.
+            val grain = 1f + (((x * 73856093) xor (y * 19349663)) and 0xFF) / 255f * GRAIN - GRAIN / 2f
+
             for (z in floor..surface) {
                 val pos = BlockPos(x, y, z)
                 val block = world.blockAt(pos)
@@ -162,16 +182,19 @@ fun WorldCanvas(
                 // biggest saving in the draw loop.
                 if (z < surface && isEnclosed(world, pos)) continue
 
+                val isTop = z == surface
+                val lit = depthShade * if (isTop) grain else 1f
                 val screen = projection.project(pos)
                 drawBlock(
                     centerX = originX + screen.x,
                     centerY = originY + screen.y,
                     projection = projection,
-                    topColor = Color(block.topColor),
-                    sideColor = Color(block.sideColor),
+                    topColor = Color(block.topColor).scaleRgb(lit),
+                    sideColor = Color(block.sideColor).scaleRgb(depthShade),
                     highlighted = pos == highlight,
                     accent = Color(block.accentColor),
                     faces = faces,
+                    shadowTop = isTop && shadowed,
                 )
             }
         }
@@ -567,6 +590,8 @@ private fun DrawScope.drawBlock(
     accent: Color,
     highlighted: Boolean,
     faces: BlockFaces,
+    /** True when a taller neighbour is casting onto this cell. */
+    shadowTop: Boolean = false,
 ) {
     val halfWidth = projection.tileWidth * projection.zoom / 2f
     val halfHeight = projection.tileHeight * projection.zoom / 2f
@@ -578,8 +603,21 @@ private fun DrawScope.drawBlock(
     drawPath(faces.right, sideColor.scaleRgb(RIGHT_FACE_SHADE))
     drawPath(faces.top, topColor)
 
+    if (shadowTop) {
+        drawPath(faces.top, LEDGE_SHADOW)
+    }
+
+    // A seam on every top face. Individually almost invisible; together they
+    // are what makes a field of tiles read as cells you could dig or build on
+    // rather than as one painted surface.
+    drawPath(faces.top, TILE_SEAM, style = Stroke(width = 1f))
+
     if (highlighted) {
-        drawPath(faces.top, accent.copy(alpha = 0.35f))
+        // A target you can actually find. The old wash was the same value as
+        // the terrain under it, so the cell you were about to act on was
+        // indistinguishable from the ones you were not.
+        drawPath(faces.top, TARGET_FILL)
+        drawPath(faces.top, TARGET_EDGE, style = Stroke(width = 4f))
         drawPath(faces.top, accent, style = Stroke(width = 2f))
     }
 }
@@ -639,14 +677,19 @@ private fun DrawScope.drawPlayer(
     invulnerable: Boolean = false,
 ) {
     val scale = projection.tileWidth * projection.zoom
-    val radius = scale * 0.22f
+    // Deliberately larger than any monster. In a field of coloured markers the
+    // one thing that must never be ambiguous is which one is you, and at the
+    // old size the player read as one more dot among the enemies.
+    val radius = scale * PLAYER_RADIUS
     val lift = projection.blockHeight * projection.zoom * 0.5f
     val center = Offset(x, y - lift)
 
+    // A tight, dark contact shadow: without one the player floats above the
+    // terrain instead of standing on it.
     drawOval(
-        color = Color.Black.copy(alpha = 0.4f),
-        topLeft = Offset(x - radius, y - radius * 0.5f),
-        size = Size(radius * 2f, radius),
+        color = Color.Black.copy(alpha = 0.55f),
+        topLeft = Offset(x - radius * 0.9f, y - radius * 0.45f),
+        size = Size(radius * 1.8f, radius * 0.9f),
     )
 
     drawCircle(accent.copy(alpha = 0.25f), radius * 1.5f, center)
@@ -665,7 +708,9 @@ private fun DrawScope.drawPlayer(
         topLeft = Offset(center.x - radius, center.y - radius * squash),
         size = Size(radius * 2f, radius * 2f * squash),
     )
-    drawCircle(PLAYER_EDGE, radius, center, style = Stroke(2.5f))
+    // A heavy outline is most of the silhouette: it holds the shape against
+    // both bright grass and dark stone without needing two palettes.
+    drawCircle(PLAYER_EDGE, radius, center, style = Stroke(4f))
 
     // An i-frame ring: the player needs to know the window is still open.
     if (invulnerable) {
@@ -755,6 +800,14 @@ private fun Color.scaleRgb(factor: Float) = Color(
 )
 
 /** The south-west face reads as turned away from the light. */
+/** Levels below the player before depth shading bottoms out. */
+private const val DEPTH_SHADE_RANGE = 8
+/** How dark the deepest visible level goes. */
+private const val DEPTH_SHADE_STRENGTH = 0.45f
+/** Per-cell brightness jitter, so a large plain is not perfectly flat. */
+private const val GRAIN = 0.07f
+private val LEDGE_SHADOW = Color(0xFF000000).copy(alpha = 0.22f)
+private val TILE_SEAM = Color(0xFF000000).copy(alpha = 0.10f)
 private const val LEFT_FACE_SHADE = 0.72f
 private const val RIGHT_FACE_SHADE = 0.52f
 private const val VISIBLE_DEPTH = 6
@@ -765,6 +818,10 @@ private const val BASE_TEXT_FRACTION = 0.26f
 private const val SPREAD_BUCKETS = 5
 private const val SPREAD_FRACTION = 0.16f
 private const val SPRITE_SCALE = 1.35f
+/** Fraction of a tile width. Was 0.22; a player you cannot find is not a player. */
+private const val PLAYER_RADIUS = 0.34f
+private val TARGET_FILL = Color(0xFFFFFFFF).copy(alpha = 0.18f)
+private val TARGET_EDGE = Color(0xFF14110E).copy(alpha = 0.85f)
 private val INVULNERABLE_RING = Color(0xFF7FD4E0)
 private val GHOST_OK = Color(0xFF8FB8DE)
 private val GHOST_SHORT = Color(0xFFD2544B)
