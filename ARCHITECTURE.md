@@ -88,6 +88,36 @@ fake model that returns markdown-fenced JSON, missing namespaces, dangling block
 references and out-of-range numbers, and assert the result is still playable —
 with no network and no Android.
 
+## Swapping world generation
+
+Terrain has two seams, because there are two different things people want to
+change.
+
+**Describe a different landscape.** A pack ships a `TerrainRecipe`: elevation
+noise layers, a terrace step, material strata. No code, so the AI pack forge or
+a JSON file can author one. `terraceStep` is the important knob — smooth noise
+produces a landscape of one-block steps that reads as texture and cannot be
+walked or built on, while snapping heights to plateaus gives ledges you can see
+and ground you can use.
+
+**Replace the algorithm entirely.** Register a factory and name it in a recipe:
+
+```kotlin
+StratumTerrain.registry.register("mypack:caves") { context ->
+    MyCaveGenerator(context.config, context.biomes, context.recipe)
+}
+```
+
+A pack asking for `mypack:caves` then gets it. `TerrainGenerator` requires one
+method; `BiomeSource` is a separate optional interface, so a generator with no
+concept of biomes — a dungeon builder, a flat sandbox — does not have to invent
+them. `WorldSession` also takes a generator directly, which is how tests run on
+terrain they control.
+
+An unknown generator id is an error rather than a silent fallback. A pack asking
+for something this build does not have should say so, not quietly hand the
+player a different world.
+
 ## Determinism
 
 The world seed drives one `Random` for the whole session, so a run replays

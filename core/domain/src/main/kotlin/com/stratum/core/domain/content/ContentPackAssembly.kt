@@ -10,6 +10,7 @@ import com.stratum.core.domain.item.RarityStyle
 import com.stratum.core.domain.item.WeaponBase
 import com.stratum.core.domain.sprite.SpriteSheet
 import com.stratum.core.domain.world.BlockRegistry
+import com.stratum.core.domain.world.TerrainRecipe
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -88,6 +89,9 @@ class ContentPackAssembler {
             damageTypes = damageTypes.values.toList(),
             affixes = affixes.values.toList(),
             inserts = inserts.values.toList(),
+            // Last pack with an opinion wins, like every other override. A pack
+            // that says nothing about terrain leaves the previous shape alone.
+            terrain = packs.lastOrNull { it.terrain != null }?.terrain ?: TerrainRecipe(),
             weapons = weapons.values.toList(),
             enemies = enemies.values.toList(),
             skills = skills.values.toList(),
@@ -161,6 +165,8 @@ data class AssembledContent(
     val damageTypes: List<DamageTypeDefinition> = emptyList(),
     val affixes: List<AffixDefinition> = emptyList(),
     val inserts: List<InsertDefinition> = emptyList(),
+    /** The world shape the loaded packs settled on. */
+    val terrain: TerrainRecipe = TerrainRecipe(),
     val weapons: List<WeaponBase> = emptyList(),
     val enemies: List<EnemyDefinition> = emptyList(),
     val skills: List<SkillDefinition> = emptyList(),

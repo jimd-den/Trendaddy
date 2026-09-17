@@ -17,6 +17,9 @@ import com.stratum.core.domain.world.BlockPos
 import com.stratum.core.domain.world.Chunk
 import com.stratum.core.domain.world.Direction
 import com.stratum.core.domain.world.World
+import com.stratum.core.domain.world.BiomeSource
+import com.stratum.core.domain.world.TerrainContext
+import com.stratum.core.domain.world.TerrainGenerator
 import com.stratum.core.domain.world.WorldConfig
 import com.stratum.core.domain.world.WorldPoint
 import kotlin.math.abs
@@ -36,8 +39,24 @@ class WorldSession(
     val content: AssembledContent,
     val config: WorldConfig,
     heroClassId: String? = null,
+    /**
+     * The algorithm that builds the terrain. Null resolves the one the loaded
+     * packs asked for, which is what makes world generation swappable without
+     * touching the session: pass your own here, or register a factory and name
+     * it in a pack's recipe.
+     */
+    terrainGenerator: TerrainGenerator? = null,
 ) {
-    private val generator = LayeredTerrainGenerator(config, content.biomes)
+    private val generator: TerrainGenerator = terrainGenerator ?: StratumTerrain.create(
+        TerrainContext(config, content.biomes, content.terrain),
+    )
+
+    /**
+     * Only generators that claim to know about biomes are asked. One that does
+     * not — a dungeon builder, a flat sandbox — leaves the region unnamed rather
+     * than being forced to invent one.
+     */
+    private val biomeSource: BiomeSource? = generator as? BiomeSource
     private val streamingWorld = StreamingWorld(content.registry, generator, config)
     private val interaction = BlockInteractionSystem(streamingWorld)
 
@@ -1084,7 +1103,9 @@ class WorldSession(
      * position that produced the terrain in the first place.
      */
     val currentBiome: BiomeDefinition
-        get() = generator.biomeAt(player.blockPos.x, player.blockPos.y)
+        get() = biomeSource?.biomeAt(player.blockPos.x, player.blockPos.y)
+            ?: content.biomes.firstOrNull()
+            ?: UNCHARTED
 
     /** Immutable view for the UI layer. */
     fun snapshot(): SessionSnapshot = SessionSnapshot(
@@ -1149,6 +1170,15 @@ class WorldSession(
         private const val FEEDBACK_LEVEL = 0xFFFFC107L
         private const val FEEDBACK_BUILT = 0xFF8FB8DEL
         private val SPAWN_CHUNK = com.stratum.core.domain.world.ChunkPos(0, 0)
+
+        /** Shown when a generator names no regions and the packs define none. */
+        private val UNCHARTED = BiomeDefinition(
+            id = "stratum:uncharted",
+            name = "Uncharted",
+            surfaceBlockId = com.stratum.core.domain.world.BlockType.BEDROCK.id,
+            subsurfaceBlockId = com.stratum.core.domain.world.BlockType.BEDROCK.id,
+            bedrockFillerBlockId = com.stratum.core.domain.world.BlockType.BEDROCK.id,
+        )
     }
 }
 
