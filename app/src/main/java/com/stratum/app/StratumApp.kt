@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
@@ -41,13 +43,19 @@ import com.stratum.feature.forge.ForgeScreen
 import com.stratum.feature.forge.ForgeViewModel
 import com.stratum.feature.forge.SpriteForgeScreen
 import com.stratum.feature.forge.SpriteForgeViewModel
+import com.stratum.feature.hero.ClassForgeScreen
+import com.stratum.feature.hero.ClassForgeViewModel
+import com.stratum.core.data.hero.CustomClassStore
+import com.stratum.core.domain.content.CustomClassPack
+import com.stratum.core.domain.content.HeroClassDefinition
+import com.stratum.core.designsystem.component.StratumChip
 import com.stratum.feature.play.DrawableSprite
 import com.stratum.feature.play.SpriteKey
 import com.stratum.feature.play.PlayScreen as PlayScreenRoute
 import com.stratum.feature.play.PlayViewModel
 
 /** Top-level destinations. Deliberately few: the game is the app, not a tab in it. */
-private enum class Destination { HOME, PLAY, FORGE, SPRITES, SETTINGS, STUDIO }
+private enum class Destination { HOME, PLAY, CLASSES, FORGE, SPRITES, SETTINGS, STUDIO }
 
 /**
  * The app shell.
@@ -63,17 +71,33 @@ fun StratumApp(
 ) {
     var destination by remember { mutableStateOf(Destination.HOME) }
 
+    val context = LocalContext.current
+
     // Packs the player has forged this session. Adding one rebuilds the
     // assembled content, so the next world is made of the new material.
     var forgedPacks by remember { mutableStateOf(emptyList<ContentPack>()) }
-    val content = remember(forgedPacks) { GameSetup.assemble(forgedPacks) }
+
+    // Classes the player built, loaded as a pack of their own so a class they
+    // made and a class the pack shipped travel the same road.
+    val classStore = remember(context) { CustomClassStore(context) }
+    var classRevision by remember { mutableStateOf(0) }
+    val customClasses = remember(classRevision) { classStore.all() }
+    val content = remember(forgedPacks, customClasses) {
+        GameSetup.assemble(
+            forgedPacks + if (customClasses.isEmpty()) emptyList()
+            else listOf(CustomClassPack.of(customClasses)),
+        )
+    }
+
+    // Null means "whatever the packs list first", which is what a player who has
+    // never opened the class forge should get.
+    var heroClassId by remember { mutableStateOf<String?>(null) }
 
     // A new seed per run, but stable across recomposition so walking around does
     // not regenerate the world under the player.
     var seed by remember { mutableStateOf(System.currentTimeMillis()) }
     val config = remember(seed) { GameSetup.worldConfig(seed) }
 
-    val context = LocalContext.current
     val ai = remember(context) { AiWiring(context) }
 
     // Sheets generated this session join the loaded packs, so a drawing made
@@ -107,6 +131,10 @@ fun StratumApp(
             blockCount = content.registry.size,
             biomeCount = content.biomes.size,
             classCount = content.heroClasses.size,
+            heroClasses = content.heroClasses,
+            selectedClassId = heroClassId ?: content.heroClasses.firstOrNull()?.id,
+            onSelectClass = { heroClassId = it },
+            onBuildClass = { destination = Destination.CLASSES },
             onDescend = {
                 seed = System.currentTimeMillis()
                 destination = Destination.PLAY
@@ -122,10 +150,11 @@ fun StratumApp(
         Destination.PLAY -> {
             // Keyed so forging a pack or starting a new run builds a fresh
             // session rather than reusing the previous world.
-            key(contentWithSprites, config) {
+            key(contentWithSprites, config, heroClassId) {
                 val viewModel: PlayViewModel = viewModel(
                     factory = PlayViewModel.factory(
                         contentWithSprites, config,
+                        heroClassId = heroClassId,
                         spriteResolver = spriteResolver,
                     ),
                 )
@@ -135,6 +164,32 @@ fun StratumApp(
                     onOpenMenu = { destination = Destination.HOME },
                 )
             }
+        }
+
+        Destination.CLASSES -> {
+            val classViewModel: ClassForgeViewModel = viewModel(
+                key = "classes-${'$'}classRevision",
+                factory = ClassForgeViewModel.factory(
+                    content = content,
+                    saveClass = { hero ->
+                        classStore.save(hero)
+                        classRevision++
+                    },
+                    deleteClass = { id ->
+                        classStore.delete(id)
+                        // Playing as a class that no longer exists would silently
+                        // fall back to another one; forget the choice instead.
+                        if (heroClassId == id) heroClassId = null
+                        classRevision++
+                    },
+                    loadClasses = classStore::all,
+                ),
+            )
+            ClassForgeScreen(
+                viewModel = classViewModel,
+                modifier = modifier,
+                onBack = { destination = Destination.HOME },
+            )
         }
 
         Destination.FORGE -> {
@@ -200,6 +255,10 @@ private fun HomeScreen(
     blockCount: Int,
     biomeCount: Int,
     classCount: Int,
+    heroClasses: List<HeroClassDefinition>,
+    selectedClassId: String?,
+    onSelectClass: (String) -> Unit,
+    onBuildClass: () -> Unit,
     onDescend: () -> Unit,
     onForge: () -> Unit,
     onSprites: () -> Unit,
@@ -265,10 +324,47 @@ private fun HomeScreen(
         StratumPanel(modifier = Modifier.fillMaxWidth()) {
             SectionLabel("Begin")
             Spacer(Modifier.height(Space.medium))
+
+            // The class is chosen before the run, not after: it decides the
+            // spawn, the starting weapon and the skill bar.
+            if (heroClasses.isNotEmpty()) {
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Space.small),
+                ) {
+                    items(heroClasses, key = HeroClassDefinition::id) { hero ->
+                        StratumChip(
+                            label = hero.name,
+                            selected = hero.id == selectedClassId,
+                            onClick = { onSelectClass(hero.id) },
+                        )
+                    }
+                }
+                heroClasses.firstOrNull { it.id == selectedClassId }?.let { hero ->
+                    Spacer(Modifier.height(Space.small))
+                    Text(
+                        text = "${hero.resolvedStats.maxHealth} hp · " +
+                            "${hero.resolvedStats.attackPower} attack · " +
+                            "${hero.baseResource} ${hero.resourceName.lowercase()}" +
+                            if (hero.title.isNotBlank()) " · ${hero.title}" else "",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.inkMuted,
+                    )
+                }
+                Spacer(Modifier.height(Space.medium))
+            }
+
             StratumAction(
                 label = "Descend",
                 onClick = onDescend,
                 emphasis = ActionEmphasis.PRIMARY,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(Space.small))
+            StratumAction(
+                label = "Build a class",
+                onClick = onBuildClass,
+                emphasis = ActionEmphasis.SECONDARY,
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(Space.small))

@@ -40,6 +40,7 @@ include(":core:designsystem")
 include(":engine:world")
 include(":feature:play")
 include(":feature:forge")
+include(":feature:hero")
 include(":content:igbo")
 
 // The original engine, moved out of :app and split along the layering it

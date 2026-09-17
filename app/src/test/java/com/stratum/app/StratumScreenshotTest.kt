@@ -20,6 +20,10 @@ import com.stratum.core.domain.ai.toDomain
 import com.stratum.feature.forge.ForgeScreenContent
 import com.stratum.feature.forge.ForgeStatus
 import com.stratum.feature.forge.ForgeUiState
+import com.stratum.core.domain.content.ClassDraft
+import com.stratum.core.domain.content.ClassOptions
+import com.stratum.feature.hero.ClassForgeScreenContent
+import com.stratum.feature.hero.ClassForgeUiState
 import com.stratum.feature.play.PlayScreenContent
 import com.stratum.feature.play.PlayUiState
 import org.junit.Rule
@@ -190,6 +194,44 @@ class StratumScreenshotTest {
             }
         }
         composeTestRule.onRoot().captureRoboImage(filePath = "src/test/screenshots/play_cutout.png")
+    }
+
+    @Test
+    fun class_forge_screen() {
+        val content = GameSetup.assemble()
+
+        // A half-built class: named, points spent unevenly, two skills taken.
+        // An empty form proves the fields exist; a build in progress proves the
+        // readout keeps up with the choices.
+        val draft = ClassDraft(
+            name = "Nsibidi Scribe",
+            title = "Keeper of the Marks",
+            description = "Reads the marks left on bronze, and writes new ones in a fight.",
+            resourceName = "Nsibidi",
+        )
+            .withAttribute(ClassDraft.Attribute.STRENGTH, 8)
+            .withAttribute(ClassDraft.Attribute.INSIGHT, ClassDraft.SKILL_THRESHOLD)
+            .toggling(content.skills.first().id)
+            .toggling(content.skills[1].id)
+            .copy(startingWeaponId = content.weapons.first().id)
+            .togglingBlock(content.registry.all.first { !it.isAir && it.isBreakable }.id)
+
+        composeTestRule.setContent {
+            StratumTheme(palette = content.palette, darkTheme = true) {
+                ClassForgeScreenContent(
+                    state = ClassForgeUiState(
+                        draft = draft,
+                        options = ClassOptions.from(content),
+                        skills = content.skills,
+                        weapons = content.weapons,
+                        blocks = content.registry.all.filter { !it.isAir && it.isBreakable },
+                        saved = listOf(draft.copy(name = "Ogu Warden").toDefinition()),
+                    ),
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        composeTestRule.onRoot().captureRoboImage(filePath = "src/test/screenshots/class_forge.png")
     }
 
     @Test
