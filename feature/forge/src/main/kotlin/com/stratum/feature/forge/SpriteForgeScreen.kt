@@ -66,6 +66,8 @@ fun SpriteForgeScreen(
     onMapFrames: () -> Unit = {},
     /** Opens the pose forge, which builds a character from one drawing. */
     onPoseForge: () -> Unit = {},
+    /** Opens the weapon forge, which draws weapons nobody owns yet. */
+    onWeaponForge: () -> Unit = {},
 ) {
     // Re-read the provider on every visit. The view model outlives this screen,
     // so without this a key saved in settings a moment ago is still reported as
@@ -89,6 +91,7 @@ fun SpriteForgeScreen(
         previewFor = previewFor,
         onMapFrames = onMapFrames,
         onPoseForge = onPoseForge,
+        onWeaponForge = onWeaponForge,
     )
 }
 
@@ -109,6 +112,7 @@ fun SpriteForgeContent(
     previewFor: (String) -> ImageBitmap? = { null },
     onMapFrames: () -> Unit = {},
     onPoseForge: () -> Unit = {},
+    onWeaponForge: () -> Unit = {},
 ) {
     val colors = StratumTheme.colors
 
@@ -158,6 +162,27 @@ fun SpriteForgeContent(
             StratumAction(
                 label = "Pose forge",
                 onClick = onPoseForge,
+                emphasis = ActionEmphasis.SECONDARY,
+            )
+        }
+
+        Spacer(Modifier.height(Space.medium))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Weapons are drawn separately and attached at the hand, so one sword " +
+                    "serves every character.",
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.inkMuted,
+                modifier = Modifier.weight(1f),
+            )
+            StratumAction(
+                label = "Weapons",
+                onClick = onWeaponForge,
                 emphasis = ActionEmphasis.SECONDARY,
             )
         }

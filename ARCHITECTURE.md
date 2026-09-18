@@ -204,6 +204,52 @@ Models answer a request for alpha by *drawing* the editor checkerboard at least
 as often as they return a real alpha channel, and a drawn checkerboard is
 unrecoverable; a flat colour is unambiguous to produce and trivial to key out.
 
+## Why weapons are not drawn on characters
+
+A sword drawn into a character belongs to that character forever. It cannot be
+dropped, cannot be swapped for a better one, and has to be drawn again for every
+actor that carries one — which, in a game whose whole loop is picking up better
+loot, is exactly backwards.
+
+It was also a measured failure. A weapon held in a character's reference pose
+*disappeared* the moment the pose changed: an image editor reads a held object
+as part of the pose and drops it along with the old one. A weapon that was never
+in the reference cannot be lost from it, so references are now drawn with empty
+hands and every pose edit is told to keep them empty.
+
+So `WeaponSprite` is one drawing that nobody owns, and `WeaponAnchor` says where
+it sits for one frame — position as a fraction of the character's frame box,
+rotation from vertical, and which side of the body it passes. `WeaponPosing`
+holds the arcs: a wind-up goes back and up behind the shoulder, a strike comes
+down and across the front, a corpse lets go halfway through its death. Authored
+rather than derived, for the same reason the pose instructions are — finding a
+hand in a drawing is a harder problem than this is worth, and would have to be
+solved again for every character.
+
+Two details carry it. The weapon rotates about its *grip*, not its centre,
+because a sword turns in the hand and pivoting anywhere else swings the hilt out
+of the fist every frame. And it is painted inside the same mirror transform as
+the body, so a character facing the other way holds it in the other hand for
+free.
+
+Weapons are the one piece of art deliberately **not** drawn at the game's camera
+angle. They are drawn flat and upright, tip at the top, because they get rotated
+through a swing: a blade foreshortened for the isometric view is correct at one
+angle and wrong at every other one it gets turned to. Characters are drawn at
+the camera because they never rotate; weapons rotate constantly.
+
+## Why the camera is stated in degrees
+
+`IsometricCamera` is the one description of the camera, because there were four
+and the art showed it. "A three-quarter overhead angle" is not an instruction —
+models read it as a licence to pick any flattering angle, and the one they pick
+is a straight-on hero shot, which is the angle this game never shows. The
+projection is 2:1, an elevation of about 30 degrees, and art drawn at any other
+elevation sits wrong on the ground however good it is. So the camera is stated
+in degrees, and then in consequences a model can act on: the tops of the
+shoulders are visible, one side of the body is nearer than the other, the figure
+faces the bottom-right corner.
+
 ## Why the renderer makes up the difference
 
 Letting a rat's death borrow its idle keeps a dungeon shippable. On its own it

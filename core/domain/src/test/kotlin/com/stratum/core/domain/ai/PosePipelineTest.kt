@@ -189,6 +189,20 @@ class BasePoseGenerationTest {
     }
 
     @Test
+    fun `the reference is drawn empty handed and at the game's camera`() = runTest {
+        val model = RecordingImageModel()
+        GenerateBasePoseUseCase(model)(BasePoseRequest(subject = "a warrior")).getOrThrow()
+
+        val prompt = model.requests.single().prompt
+        // A reference holding a sword bakes that sword into every pose edited
+        // from it, and then the character can never put it down.
+        assertTrue("Both hands empty and open" in prompt, prompt)
+        assertTrue("isometric game camera" in prompt, prompt)
+        // Not the flat hero shot every model reaches for.
+        assertTrue("Not a flat front view" in prompt, prompt)
+    }
+
+    @Test
     fun `the reference asks for flat chroma rather than pleading for alpha`() = runTest {
         val model = RecordingImageModel()
         GenerateBasePoseUseCase(model)(BasePoseRequest(subject = "a warrior")).getOrThrow()
@@ -262,14 +276,17 @@ class PoseFrameGenerationTest {
             // every model: a pose described in legs and arms reads as a request
             // for the angle that shows legs and arms best.
             assertTrue("THE CAMERA DOES NOT MOVE" in prompt, prompt)
-            assertTrue("Do not draw a profile or side view" in prompt, prompt)
+            assertTrue("Do not draw a flat front view" in prompt, prompt)
+            // And it is the game's camera being held, not just "some angle".
+            assertTrue("isometric game camera" in prompt, prompt)
         }
 
     @Test
-    fun `carried things are named separately from worn things`() = runTest {
-        // A weapon hanging at the hip disappeared when the pose changed: a held
-        // object reads as part of the pose rather than part of the character,
-        // and gets dropped along with the old pose.
+    fun `the hands stay empty, even in an attack`() = runTest {
+        // The weapon that kept disappearing is no longer here to lose: it is a
+        // separate drawing attached at the hand. So the prompt's job flipped --
+        // it must stop the model helpfully inventing a sword for the attack
+        // pose, which would then clip through the real one.
         val model = RecordingImageModel()
         GeneratePoseFrameUseCase(model)(
             PoseFrameRequest(
@@ -279,8 +296,11 @@ class PoseFrameGenerationTest {
         ).getOrThrow()
 
         val prompt = model.requests.single().prompt
-        assertTrue("Everything the character holds or carries" in prompt, prompt)
-        assertTrue("still held or worn here" in prompt, prompt)
+        assertTrue("Empty hands" in prompt, prompt)
+        assertTrue("even if the pose is an attack" in prompt, prompt)
+        // Still gripping, so the hand has the right shape for something to be
+        // attached to it.
+        assertTrue("as though holding something" in prompt, prompt)
     }
 
     @Test

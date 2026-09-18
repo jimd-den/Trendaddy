@@ -24,6 +24,9 @@ import com.stratum.core.domain.sprite.AnimationPlayback
 import com.stratum.core.domain.sprite.ProceduralMotion
 import com.stratum.core.domain.sprite.SpriteFacing
 import com.stratum.core.domain.sprite.SpriteSheet
+import com.stratum.core.domain.sprite.WeaponLayer
+import com.stratum.core.domain.sprite.WeaponRig
+import com.stratum.core.domain.sprite.WeaponSprite
 import com.stratum.core.domain.world.BlockPos
 import com.stratum.core.domain.world.Direction
 import com.stratum.core.domain.world.Chunk
@@ -460,6 +463,48 @@ private fun DrawScope.drawSprite(
         )
     }
 
+    val weapon = sprite.weapon
+    val anchor = weapon?.rig?.anchorFor(frame)
+    val blitWeapon: (Float) -> Unit = { alpha ->
+        if (weapon != null && anchor != null) {
+            // The weapon is sized against the character rather than against its
+            // own drawing, so a dagger and a spear read as a dagger and a spear
+            // whatever canvases they happened to be generated on.
+            val height = drawHeight * weapon.sprite.kind.reach * anchor.scale
+            val width = height *
+                (weapon.image.width.toFloat() / weapon.image.height.coerceAtLeast(1))
+            val handX = left + anchor.xFraction * drawWidth
+            val handY = top + anchor.yFraction * drawHeight
+
+            // Rotated about the grip, not about the middle of the drawing: a
+            // sword turns in the hand, and pivoting anywhere else swings the
+            // hilt out of the fist on every frame of an attack.
+            withTransform({ rotate(anchor.rotationDegrees, Offset(handX, handY)) }) {
+                drawImage(
+                    image = weapon.image,
+                    dstOffset = IntOffset(
+                        (handX - weapon.sprite.gripX * width).toInt(),
+                        (handY - weapon.sprite.gripY * height).toInt(),
+                    ),
+                    dstSize = IntSize(width.toInt().coerceAtLeast(1), height.toInt().coerceAtLeast(1)),
+                    filterQuality = FilterQuality.None,
+                    alpha = alpha,
+                )
+            }
+        }
+    }
+
+    // Order is the whole difference between a weapon that is held and one that
+    // is stuck on. A wind-up goes behind the shoulder and a strike comes across
+    // the front; getting it backwards is instantly legible as wrong even to
+    // someone who could not say why.
+    val paint: () -> Unit = {
+        if (anchor?.layer == WeaponLayer.BEHIND) blitWeapon(motion.alpha)
+        blit(motion.alpha, null)
+        if (anchor?.layer == WeaponLayer.IN_FRONT) blitWeapon(motion.alpha)
+        if (flash > 0f) blit(flash * 0.75f * motion.alpha, ColorFilter.tint(Color.White))
+    }
+
     // A generated sheet reliably holds one facing, not four. Mirroring buys the
     // other side for nothing and reads correctly at this camera angle, which is
     // more dependable than asking a model for four consistent angles. Art that
@@ -471,15 +516,15 @@ private fun DrawScope.drawSprite(
     // reflects along with the body it belongs to.
     val mirrored = facing.mirrored && sheet.mirrorsFacings
     if (mirrored) {
+        // The weapon is painted inside the mirror with the body, so a character
+        // facing the other way holds it in the other hand for free.
         withTransform({
             scale(scaleX = -1f, scaleY = 1f, pivot = Offset(x, top + drawHeight / 2f))
         }) {
-            blit(motion.alpha, null)
-            if (flash > 0f) blit(flash * 0.75f * motion.alpha, ColorFilter.tint(Color.White))
+            paint()
         }
     } else {
-        blit(motion.alpha, null)
-        if (flash > 0f) blit(flash * 0.75f * motion.alpha, ColorFilter.tint(Color.White))
+        paint()
     }
 }
 
@@ -997,4 +1042,23 @@ sealed interface SpriteKey {
 }
 
 /** A sheet paired with its decoded pixels, ready to draw. */
-data class DrawableSprite(val sheet: SpriteSheet, val image: ImageBitmap)
+data class DrawableSprite(
+    val sheet: SpriteSheet,
+    val image: ImageBitmap,
+    /** What this actor is holding, if anything. Drawn separately and attached. */
+    val weapon: DrawableWeapon? = null,
+)
+
+/**
+ * A weapon and where it sits across a sheet.
+ *
+ * The rig travels with the weapon rather than with the sheet because it is
+ * about *this* actor holding *this* weapon: the same sword rigged onto a
+ * six-frame attack and a four-frame one needs different anchors, and the sheet
+ * has no opinion about whether anything is being held at all.
+ */
+data class DrawableWeapon(
+    val sprite: WeaponSprite,
+    val image: ImageBitmap,
+    val rig: WeaponRig,
+)

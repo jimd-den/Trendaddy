@@ -44,6 +44,8 @@ import com.stratum.feature.forge.ForgeViewModel
 import com.stratum.feature.forge.SpriteForgeScreen
 import com.stratum.feature.forge.SpriteForgeViewModel
 import com.stratum.feature.forge.PoseForgeScreen
+import com.stratum.feature.forge.WeaponForgeScreen
+import com.stratum.feature.forge.WeaponForgeViewModel
 import com.stratum.feature.forge.PoseForgeViewModel
 import com.stratum.feature.forge.SpriteMapperScreen
 import com.stratum.feature.forge.SpriteMapperViewModel
@@ -53,19 +55,23 @@ import com.stratum.core.data.hero.CustomClassStore
 import android.graphics.BitmapFactory
 import com.stratum.core.data.sprite.GeneratedSheetPreparer
 import com.stratum.core.data.sprite.PoseSheetComposer
+import com.stratum.core.data.sprite.WeaponPreparer
 import com.stratum.core.data.sprite.SpriteAtlasBaker
 import com.stratum.core.domain.sprite.SheetPreparation
 import com.stratum.core.domain.sprite.SpriteMapper
+import com.stratum.core.domain.sprite.WeaponPosing
+import com.stratum.core.domain.sprite.WeaponRig
 import com.stratum.core.domain.content.CustomClassPack
 import com.stratum.core.domain.content.HeroClassDefinition
 import com.stratum.core.designsystem.component.StratumChip
 import com.stratum.feature.play.DrawableSprite
+import com.stratum.feature.play.DrawableWeapon
 import com.stratum.feature.play.SpriteKey
 import com.stratum.feature.play.PlayScreen as PlayScreenRoute
 import com.stratum.feature.play.PlayViewModel
 
 /** Top-level destinations. Deliberately few: the game is the app, not a tab in it. */
-private enum class Destination { HOME, PLAY, CLASSES, FORGE, SPRITES, POSES, MAPPER, SETTINGS, STUDIO }
+private enum class Destination { HOME, PLAY, CLASSES, FORGE, SPRITES, POSES, WEAPONS, MAPPER, SETTINGS, STUDIO }
 
 /**
  * The app shell.
@@ -113,6 +119,9 @@ fun StratumApp(
     // Sheets generated this session join the loaded packs, so a drawing made
     // five minutes ago is used by the world exactly like one a pack shipped.
     var spriteRevision by remember { mutableStateOf(0) }
+    // What the player is holding. A weapon is a separate drawing attached at
+    // the hand, so changing it is changing one id -- no character is redrawn.
+    var equippedWeaponId by remember { mutableStateOf<String?>(null) }
     val spriteSheets = remember(spriteRevision) { ai.sprites.all() }
     val contentWithSprites = remember(content, spriteSheets) {
         content.withSpriteSheets(spriteSheets)
@@ -121,8 +130,22 @@ fun StratumApp(
     // Keyed on the chosen class: the player's art is a property of who they are
     // playing, and resolving it without that was the whole bug — every class
     // was drawn with whichever hero sheet happened to be newest.
-    val spriteResolver = remember(spriteRevision, contentWithSprites, heroClassId) {
-        { key: SpriteKey ->
+    val spriteResolver = remember(spriteRevision, contentWithSprites, heroClassId, equippedWeaponId) {
+        // The resolver is asked for a sprite on every drawn frame, for every
+        // actor, so anything built here has to be built once and kept. A rig is
+        // a map the size of the sheet's frame count; rebuilding it per frame
+        // would allocate one per actor per frame inside the draw loop.
+        val rigs = HashMap<String, WeaponRig>()
+        val held = equippedWeaponId?.let { id ->
+            val weapon = ai.weapons.find(id)
+            val bitmap = ai.weapons.bitmapFor(id)
+            if (weapon != null && bitmap != null) weapon to bitmap.asImageBitmap() else null
+        }
+
+        // Named rather than left as a bare trailing lambda: with a statement
+        // above it, the compiler reads `{ ... }` as an argument to that
+        // statement instead of as the value being remembered.
+        val resolve: (SpriteKey) -> DrawableSprite? = { key: SpriteKey ->
             // Candidates in order of preference rather than one guess. The
             // first choice can resolve to a sheet with no usable image — one
             // that came back blank, or a pack sheet with no pixels on this
@@ -144,10 +167,26 @@ fun StratumApp(
 
             candidates.distinctBy { it.id }.firstNotNullOfOrNull { found ->
                 ai.sprites.drawableBitmapFor(found.id)?.let { bitmap ->
-                    DrawableSprite(found, bitmap.asImageBitmap())
+                    DrawableSprite(
+                        sheet = found,
+                        image = bitmap.asImageBitmap(),
+                        // Only the player carries one for now. Giving monsters
+                        // weapons is the same mechanism plus a decision about
+                        // which monster holds what, which is pack data.
+                        weapon = if (key == SpriteKey.Player && held != null) {
+                            DrawableWeapon(
+                                sprite = held.first,
+                                image = held.second,
+                                rig = rigs.getOrPut(found.id) { WeaponPosing.rigFor(found) },
+                            )
+                        } else {
+                            null
+                        },
+                    )
                 }
             }
         }
+        resolve
     }
 
     when (destination) {
@@ -273,6 +312,7 @@ fun StratumApp(
                 previewFor = { id -> ai.sprites.drawableBitmapFor(id)?.asImageBitmap() },
                 onMapFrames = { destination = Destination.MAPPER },
                 onPoseForge = { destination = Destination.POSES },
+                onWeaponForge = { destination = Destination.WEAPONS },
             )
         }
 
@@ -316,6 +356,44 @@ fun StratumApp(
                     }
                 },
                 sheetPreviewFor = { id -> ai.sprites.drawableBitmapFor(id)?.asImageBitmap() },
+            )
+        }
+
+        Destination.WEAPONS -> {
+            val weaponViewModel: WeaponForgeViewModel = viewModel(
+                factory = WeaponForgeViewModel.factory(
+                    drawWeapon = { request, observer -> ai.generateWeapon(request, observer) },
+                    storeWeapon = { request, bytes ->
+                        // Keyed and trimmed before it is stored, because the
+                        // grip is a fraction of the weapon's box and a weapon
+                        // adrift on an empty canvas would be held by the air
+                        // beside it.
+                        WeaponPreparer.prepare(
+                            id = "weapon:${request.slug()}",
+                            name = request.subject.trim(),
+                            kind = request.kind,
+                            bytes = bytes,
+                        )?.let { prepared ->
+                            ai.weapons.save(prepared.weapon, prepared.bytes)
+                            prepared.weapon
+                        }
+                    },
+                    loadWeapons = ai.weapons::all,
+                    deleteWeapon = { id ->
+                        ai.weapons.delete(id)
+                        if (equippedWeaponId == id) equippedWeaponId = null
+                    },
+                    isProviderConfigured = ai::isConfigured,
+                ),
+            )
+            WeaponForgeScreen(
+                viewModel = weaponViewModel,
+                modifier = modifier,
+                onBack = { destination = Destination.SPRITES },
+                onOpenSettings = { destination = Destination.SETTINGS },
+                onEquip = { id -> equippedWeaponId = id },
+                equippedId = equippedWeaponId,
+                previewFor = { id -> ai.weapons.bitmapFor(id)?.asImageBitmap() },
             )
         }
 

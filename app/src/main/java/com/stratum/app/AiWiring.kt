@@ -6,12 +6,14 @@ import com.stratum.core.data.ai.OpenRouterLanguageModel
 import com.stratum.core.data.sprite.SpriteLibrary
 import com.stratum.core.data.sprite.PoseLibrary
 import com.stratum.core.data.sprite.SpriteProjectStore
+import com.stratum.core.data.sprite.WeaponLibrary
 import com.stratum.core.data.settings.ProviderSettingsStore
 import com.stratum.core.domain.ai.GenerateContentPackUseCase
 import com.stratum.core.domain.ai.GenerateLoreUseCase
 import com.stratum.core.domain.ai.GenerateBasePoseUseCase
 import com.stratum.core.domain.ai.GeneratePoseFrameUseCase
 import com.stratum.core.domain.ai.GenerateSpriteSheetUseCase
+import com.stratum.core.domain.ai.GenerateWeaponUseCase
 
 /**
  * Wires the generation use cases to a real provider.
@@ -44,6 +46,12 @@ class AiWiring(context: Context) {
      */
     val poses = PoseLibrary(context)
 
+    /**
+     * Weapons, kept apart from the characters that swing them: one sword serves
+     * every actor in the game rather than belonging to whoever it was drawn on.
+     */
+    val weapons = WeaponLibrary(context)
+
     val generateContentPack = GenerateContentPackUseCase(languageModel)
 
     val generateLore = GenerateLoreUseCase(languageModel)
@@ -54,6 +62,8 @@ class AiWiring(context: Context) {
     val generateBasePose = GenerateBasePoseUseCase(imageModel)
 
     val generatePoseFrame = GeneratePoseFrameUseCase(imageModel)
+
+    val generateWeapon = GenerateWeaponUseCase(imageModel)
 
     val modelCatalog = languageModel
 

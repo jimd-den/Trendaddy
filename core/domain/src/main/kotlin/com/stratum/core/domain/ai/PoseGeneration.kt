@@ -84,17 +84,23 @@ class GenerateBasePoseUseCase(
         appendLine(request.styleDirection.ifBlank { DEFAULT_STYLE })
         appendLine()
         appendLine("Pose, exactly:")
-        appendLine("- Standing upright, facing the viewer, both feet flat and together.")
-        appendLine("- Both arms straight out sideways at shoulder height, palms down.")
+        appendLine("- Standing upright, both feet flat on the ground and slightly apart.")
+        appendLine("- Both arms straight out to the sides at shoulder height, palms down.")
+        // Empty hands, because the weapon is drawn separately and attached at
+        // the hand. A reference holding a sword bakes that sword into every
+        // pose edited from it, and then the character cannot put it down.
+        appendLine("- Both hands empty and open. No weapon, no shield, no tool, nothing held.")
         // The whole reason for a T-pose. Said as a requirement rather than left
         // to the model's idea of what a reference sheet is.
         appendLine("- Nothing overlapping anything else: both hands, both arms, both legs")
         appendLine("  and any weapon or equipment fully visible and separated.")
         appendLine("- Full body, head to feet, nothing cropped at any edge.")
         appendLine("- Centred, filling most of the canvas, feet near the bottom.")
-        appendLine("- Neutral expression. No action, no motion, no dynamic angle.")
+        appendLine("- Neutral expression. No action, no motion.")
         appendLine("- One figure only. No turnaround, no second view, no variations.")
         appendLine("- No grid, no panel, no frame, no border, no caption, no text, no labels.")
+        appendLine()
+        appendLine(IsometricCamera.clause)
         appendLine()
         appendLine(BACKGROUND)
     }
@@ -162,17 +168,13 @@ class GeneratePoseFrameUseCase(
         appendLine()
         appendLine("New pose: ${request.step.instruction}.")
         appendLine()
-        // Its own paragraph, in capitals, stated four ways. Asked politely as
-        // one bullet among nine -- "the same camera: viewed from the same angle"
-        // -- every model tested turned the character to a profile view, because
-        // a pose described in terms of legs and arms reads as a request for the
-        // angle that shows legs and arms best. Frames that alternate between
-        // front and side are not an animation, they are a flicker, so this is
-        // the one instruction worth shouting.
-        appendLine("THE CAMERA DOES NOT MOVE. The character is seen from exactly the same")
-        appendLine("direction as in the attached image. Do not turn the character sideways.")
-        appendLine("Do not draw a profile or side view. Do not change the eye level. Only the")
-        appendLine("body's pose changes; the viewpoint is fixed.")
+        // Its own paragraph, in capitals. Asked politely as one bullet among
+        // nine -- "the same camera: viewed from the same angle" -- every model
+        // tested turned the character to a profile view, because a pose
+        // described in terms of legs and arms reads as a request for the angle
+        // those read best from. Frames that alternate between angles are not an
+        // animation, they are a flicker, so this is the one worth shouting.
+        appendLine(IsometricCamera.holdClause)
         appendLine()
         appendLine("Keep identical to the attached image:")
         appendLine("- The same character. Same face, same build, same proportions.")
@@ -182,9 +184,13 @@ class GeneratePoseFrameUseCase(
         // hanging at the hip in the reference simply disappeared when the pose
         // changed: the model reads a held object as part of the pose rather
         // than as part of the character, and drops it along with the old pose.
-        appendLine("- Everything the character holds or carries. A weapon held or worn in the")
-        appendLine("  attached image is still held or worn here: the same weapon, the same")
-        appendLine("  shape, the same size.")
+        appendLine("- Everything the character wears or carries on their body.")
+        // The reference has empty hands and every pose must keep them empty:
+        // the weapon is a separate drawing attached at the hand, so a sword
+        // invented here would be a second sword clipping through the real one.
+        appendLine("- Empty hands. The character holds nothing. Do not add a weapon, a shield,")
+        appendLine("  a tool or any held object, even if the pose is an attack. Draw the hands")
+        appendLine("  gripping as though holding something, but draw nothing in them.")
         appendLine("- The same art style and the same line weight.")
         appendLine("- The same scale: the figure occupies the same height on the canvas.")
         appendLine()

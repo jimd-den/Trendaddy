@@ -117,7 +117,8 @@ class GenerateSpriteSheetUseCase(
             appendLine("use to show transparency. Do not fill the background with any colour,")
             appendLine("white or black included. No scenery, no ground shadow, no drop shadow.")
             appendLine("Do not label the frames. Do not draw a grid, guide lines, borders or text.")
-            appendLine("Viewed from a three-quarter overhead angle, as in an isometric game.")
+            appendLine()
+            appendLine(IsometricCamera.clause)
         }
     }
 
@@ -148,7 +149,8 @@ class GenerateSpriteSheetUseCase(
         appendLine("Do NOT draw the grey and white checkerboard pattern that image editors")
         appendLine("use to show transparency. Do not fill the background with any colour,")
         appendLine("white or black included. No scenery, no ground shadow, no drop shadow.")
-        appendLine("Viewed from a three-quarter overhead angle, as in an isometric game.")
+        appendLine()
+        appendLine(IsometricCamera.clause)
     }
 
     private fun describe(state: AnimationState): String = when (state) {
