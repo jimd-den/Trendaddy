@@ -263,6 +263,7 @@ class StratumScreenshotTest {
             .toggling(content.skills[1].id)
             .copy(startingWeaponId = content.weapons.first().id)
             .togglingBlock(content.registry.all.first { !it.isAir && it.isBreakable }.id)
+            .copy(spriteSetId = "hero:nsibidi_scribe")
 
         composeTestRule.setContent {
             StratumTheme(palette = content.palette, darkTheme = true) {
@@ -273,6 +274,18 @@ class StratumScreenshotTest {
                         skills = content.skills,
                         weapons = content.weapons,
                         blocks = content.registry.all.filter { !it.isAir && it.isBreakable },
+                        // Art the sprite forge has drawn, one of it chosen: the
+                        // picker only exists when there is something to pick.
+                        sheets = listOf(
+                            com.stratum.core.domain.sprite.SpriteSheet(
+                                id = "hero:ancestral_warrior", name = "Ancestral Warrior",
+                                columns = 4, rows = 4, frameWidth = 64, frameHeight = 64,
+                            ),
+                            com.stratum.core.domain.sprite.SpriteSheet(
+                                id = "hero:nsibidi_scribe", name = "Nsibidi Scribe",
+                                columns = 4, rows = 4, frameWidth = 64, frameHeight = 64,
+                            ),
+                        ),
                         saved = listOf(draft.copy(name = "Ogu Warden").toDefinition()),
                     ),
                     modifier = Modifier.fillMaxSize(),

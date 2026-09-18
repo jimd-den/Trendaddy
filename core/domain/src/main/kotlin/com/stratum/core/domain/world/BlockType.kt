@@ -37,6 +37,11 @@ data class BlockType(
      * trunk is one tree rather than four.
      */
     val glyph: String? = null,
+    /**
+     * Multiplies the base prop size. A tree and a pebble are both props and
+     * should not be the same size, and a pack knows which is which.
+     */
+    val glyphScale: Float = 1f,
     /** Renderer hints. Packs own these so a pack can restyle the world wholesale. */
     val topColor: Long = 0xFF9E9E9E,
     val sideColor: Long = 0xFF6E6E6E,

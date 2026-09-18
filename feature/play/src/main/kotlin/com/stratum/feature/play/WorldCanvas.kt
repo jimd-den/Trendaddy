@@ -185,6 +185,7 @@ fun WorldCanvas(
             // The column's prop, if any: drawn once at the top of its run, so a
             // four-block trunk is one tree rather than four stacked emoji.
             var propGlyph: String? = null
+            var propScale = 1f
             var propAt = 0
 
             for (z in floor..surface) {
@@ -195,6 +196,7 @@ fun WorldCanvas(
                 val glyph = block.glyph
                 if (glyph != null) {
                     propGlyph = glyph
+                    propScale = block.glyphScale
                     propAt = z
                     continue
                 }
@@ -226,7 +228,7 @@ fun WorldCanvas(
                     y = originY + screen.y,
                     projection = projection,
                     glyph = glyph,
-                    scale = PROP_GLYPH_SCALE,
+                    scale = PROP_GLYPH_SCALE * propScale,
                     shade = depthShade,
                 )
             }

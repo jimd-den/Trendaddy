@@ -108,11 +108,20 @@ fun StratumApp(
         content.withSpriteSheets(spriteSheets)
     }
 
-    val spriteResolver = remember(spriteRevision, contentWithSprites) {
+    // Keyed on the chosen class: the player's art is a property of who they are
+    // playing, and resolving it without that was the whole bug — every class
+    // was drawn with whichever hero sheet happened to be newest.
+    val spriteResolver = remember(spriteRevision, contentWithSprites, heroClassId) {
         { key: SpriteKey ->
             val sheet = when (key) {
-                SpriteKey.Player ->
-                    contentWithSprites.spriteSheets.firstOrNull { it.id.startsWith("hero:") }
+                SpriteKey.Player -> {
+                    val chosen = heroClassId ?: contentWithSprites.heroClasses.firstOrNull()?.id
+                    chosen?.let(contentWithSprites::sheetForHero)
+                        // A player who has drawn art but assigned none still
+                        // gets to see it, rather than art they made sitting
+                        // unused because they missed a picker.
+                        ?: contentWithSprites.spriteSheets.firstOrNull { it.id.startsWith("hero:") }
+                }
                 is SpriteKey.Monster ->
                     contentWithSprites.sheetForEnemy(key.definitionId)
                         ?: contentWithSprites.spriteSheets.firstOrNull { it.id.startsWith("monster:") }
@@ -183,6 +192,7 @@ fun StratumApp(
                         classRevision++
                     },
                     loadClasses = classStore::all,
+                    loadSheets = ai.sprites::all,
                 ),
             )
             ClassForgeScreen(

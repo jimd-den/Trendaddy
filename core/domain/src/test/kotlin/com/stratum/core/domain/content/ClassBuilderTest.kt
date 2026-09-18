@@ -3,6 +3,7 @@ package com.stratum.core.domain.content
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ClassBuilderTest {
@@ -161,6 +162,23 @@ class ClassBuilderTest {
         assertEquals(original.skillIds, again.skillIds)
         assertEquals(original.resourceName, again.resourceName)
         assertEquals(original.startingWeaponId, again.startingWeaponId)
+    }
+
+    @Test
+    fun `the class carries the art it was given, and can give it back`() {
+        val drawn = draft().copy(spriteSetId = "hero:nsibidi_scribe")
+
+        val definition = drawn.toDefinition()
+
+        assertEquals("hero:nsibidi_scribe", definition.spriteSetId)
+        assertEquals("hero:nsibidi_scribe", ClassDraft.from(definition).spriteSetId)
+    }
+
+    @Test
+    fun `no art chosen means shapes, not a broken reference`() {
+        val definition = draft().toDefinition()
+
+        assertNull(definition.spriteSetId)
     }
 
     @Test
