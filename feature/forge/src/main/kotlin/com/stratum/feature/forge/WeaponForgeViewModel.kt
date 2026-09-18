@@ -6,6 +6,9 @@ import androidx.lifecycle.viewModelScope
 import com.stratum.core.domain.ai.GeneratedImage
 import com.stratum.core.domain.ai.GenerationObserver
 import com.stratum.core.domain.ai.WeaponRequest
+import com.stratum.core.domain.sprite.AnimationState
+import com.stratum.core.domain.sprite.SpriteSheet
+import com.stratum.core.domain.sprite.WeaponFit
 import com.stratum.core.domain.sprite.WeaponKind
 import com.stratum.core.domain.sprite.WeaponSprite
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,22 +30,85 @@ class WeaponForgeViewModel(
     private val storeWeapon: (WeaponRequest, ByteArray) -> WeaponSprite?,
     private val loadWeapons: () -> List<WeaponSprite>,
     private val deleteWeapon: (String) -> Unit,
+    /** Characters a weapon can be fitted to. */
+    private val loadSheets: () -> List<SpriteSheet>,
+    private val fitFor: (String) -> WeaponFit,
+    private val saveFit: (String, WeaponFit) -> Unit,
     private val isProviderConfigured: () -> Boolean,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(
         WeaponForgeUiState(
             weapons = loadWeapons(),
+            sheets = loadSheets(),
             providerConfigured = isProviderConfigured(),
         ),
     )
     val state: StateFlow<WeaponForgeUiState> = _state.asStateFlow()
 
     fun refresh() {
-        _state.value = _state.value.copy(
+        val sheets = loadSheets()
+        val current = _state.value
+        // Falls onto the first character there is, so the fit controls are
+        // usable the moment a weapon and a character both exist.
+        val fitting = current.fittingSheetId ?: sheets.firstOrNull()?.id
+        _state.value = current.copy(
             weapons = loadWeapons(),
+            sheets = sheets,
             providerConfigured = isProviderConfigured(),
+            fittingSheetId = fitting,
+            fit = fitting?.let(fitFor) ?: WeaponFit.none,
         )
+    }
+
+    // ---- fitting a weapon to a character ---------------------------------
+
+    fun selectFittingSheet(sheetId: String) {
+        _state.value = _state.value.copy(
+            fittingSheetId = sheetId,
+            fit = fitFor(sheetId),
+            previewFrame = 0,
+        )
+    }
+
+    /**
+     * Steps through the frames of the animation being fitted.
+     *
+     * An attack is where a weapon is most obviously right or wrong, so the
+     * whole arc is walkable rather than showing one representative pose: a
+     * weapon that sits perfectly in the wind-up can still be a hand's width
+     * adrift at the follow-through.
+     */
+    fun stepPreview(forward: Boolean) {
+        val frames = _state.value.previewFrameCount
+        if (frames <= 0) return
+        val next = (_state.value.previewFrame + if (forward) 1 else -1 + frames) % frames
+        _state.value = _state.value.copy(previewFrame = next)
+    }
+
+    /**
+     * Nudges where the weapon sits on this character.
+     *
+     * The arcs stay as authored and the character supplies the correction,
+     * because the shape of a swing is universal and a figure's proportions are
+     * not. Authoring every anchor per character is work nobody does twice.
+     */
+    fun nudgeFit(dx: Float = 0f, dy: Float = 0f, scale: Float = 0f) {
+        val sheetId = _state.value.fittingSheetId ?: return
+        val current = _state.value.fit
+        val next = WeaponFit(
+            offsetX = (current.offsetX + dx).coerceIn(-WeaponFit.MAX_OFFSET, WeaponFit.MAX_OFFSET),
+            offsetY = (current.offsetY + dy).coerceIn(-WeaponFit.MAX_OFFSET, WeaponFit.MAX_OFFSET),
+            scale = (current.scale + scale).coerceIn(WeaponFit.MIN_SCALE, WeaponFit.MAX_SCALE),
+        )
+        saveFit(sheetId, next)
+        _state.value = _state.value.copy(fit = next)
+    }
+
+    fun resetFit() {
+        val sheetId = _state.value.fittingSheetId ?: return
+        saveFit(sheetId, WeaponFit.none)
+        _state.value = _state.value.copy(fit = WeaponFit.none)
     }
 
     fun updateSubject(subject: String) {
@@ -125,11 +191,15 @@ class WeaponForgeViewModel(
             storeWeapon: (WeaponRequest, ByteArray) -> WeaponSprite?,
             loadWeapons: () -> List<WeaponSprite>,
             deleteWeapon: (String) -> Unit,
+            loadSheets: () -> List<SpriteSheet>,
+            fitFor: (String) -> WeaponFit,
+            saveFit: (String, WeaponFit) -> Unit,
             isProviderConfigured: () -> Boolean,
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T = WeaponForgeViewModel(
-                drawWeapon, storeWeapon, loadWeapons, deleteWeapon, isProviderConfigured,
+                drawWeapon, storeWeapon, loadWeapons, deleteWeapon, loadSheets, fitFor, saveFit,
+                isProviderConfigured,
             ) as T
         }
     }
@@ -146,4 +216,27 @@ data class WeaponForgeUiState(
     val providerConfigured: Boolean = false,
     val message: String? = null,
     val error: String? = null,
-)
+    /** Characters available to fit a weapon to. */
+    val sheets: List<SpriteSheet> = emptyList(),
+    val fittingSheetId: String? = null,
+    val fit: WeaponFit = WeaponFit.none,
+    val previewFrame: Int = 0,
+) {
+    val fittingSheet: SpriteSheet? get() = sheets.firstOrNull { it.id == fittingSheetId }
+
+    /**
+     * The clip the fit is judged against.
+     *
+     * An attack when there is one, because that is where a weapon is most
+     * obviously right or wrong; otherwise whatever the sheet has.
+     */
+    val previewClip get() = fittingSheet?.let { sheet ->
+        sheet.clip(AnimationState.ATTACK) ?: sheet.clips.firstOrNull()
+    }
+
+    val previewFrameCount: Int get() = previewClip?.frameCount ?: 0
+
+    /** The frame index into the sheet, not into the clip. */
+    val previewSheetFrame: Int
+        get() = previewClip?.let { it.firstFrame + previewFrame.coerceIn(0, it.frameCount - 1) } ?: 0
+}

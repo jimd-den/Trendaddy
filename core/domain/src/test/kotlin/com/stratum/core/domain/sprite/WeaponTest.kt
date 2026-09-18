@@ -145,3 +145,72 @@ class WeaponSpriteTest {
         assertNull(WeaponRig().anchorFor(0))
     }
 }
+
+/**
+ * The correction a character supplies to the authored arcs.
+ *
+ * Needed because the arcs cannot be authored accurately: measured against a
+ * generated warrior, the first set of anchors put the hand a full hand's width
+ * outside the character. The shape of a swing is universal; a figure's
+ * proportions are not.
+ */
+class WeaponFitTest {
+
+    private val anchor = WeaponAnchor(
+        xFraction = 0.55f,
+        yFraction = 0.24f,
+        rotationDegrees = -130f,
+        scale = 1f,
+    )
+
+    @Test
+    fun `a fit moves the hand and resizes the weapon`() {
+        val fit = WeaponFit(offsetX = -0.08f, offsetY = -0.04f, scale = 1.2f)
+        val fitted = fit.applyTo(anchor)
+
+        assertEquals(0.47f, fitted.xFraction, 0.0001f)
+        assertEquals(0.20f, fitted.yFraction, 0.0001f)
+        assertEquals(1.2f, fitted.scale, 0.0001f)
+    }
+
+    @Test
+    fun `a fit never touches the shape of the swing`() {
+        // Only where the hand is and how big the weapon is. Bending the arc
+        // itself per character would lose the one thing that is universal.
+        val fitted = WeaponFit(offsetX = 0.2f, offsetY = -0.2f, scale = 2f).applyTo(anchor)
+        assertEquals(anchor.rotationDegrees, fitted.rotationDegrees)
+        assertEquals(anchor.layer, fitted.layer)
+    }
+
+    @Test
+    fun `no fit changes nothing`() {
+        assertEquals(anchor, WeaponFit.none.applyTo(anchor))
+        assertTrue(WeaponFit.none.isIdentity)
+    }
+
+    @Test
+    fun `a rig carries the character's fit into every frame`() {
+        val sheet = SpriteSheet(
+            id = "t", name = "T", columns = 4, rows = 1, frameWidth = 96, frameHeight = 96,
+            clips = listOf(AnimationClip(AnimationState.ATTACK, 0, 4, loops = false)),
+        )
+        val plain = WeaponPosing.rigFor(sheet)
+        val fitted = WeaponPosing.rigFor(sheet, WeaponFit(offsetX = -0.08f))
+
+        for (frame in 0 until 4) {
+            val before = assertNotNull(plain.anchorFor(frame))
+            val after = assertNotNull(fitted.anchorFor(frame))
+            assertEquals(before.xFraction - 0.08f, after.xFraction, 0.0001f)
+            assertEquals(before.rotationDegrees, after.rotationDegrees)
+        }
+    }
+
+    @Test
+    fun `a weapon dropped mid-death stays dropped however it is fitted`() {
+        val sheet = SpriteSheet(
+            id = "t", name = "T", columns = 4, rows = 1, frameWidth = 96, frameHeight = 96,
+            clips = listOf(AnimationClip(AnimationState.DIE, 0, 4)),
+        )
+        assertNull(WeaponPosing.rigFor(sheet, WeaponFit(offsetY = 0.2f)).anchorFor(3))
+    }
+}

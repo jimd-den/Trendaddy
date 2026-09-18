@@ -23,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,7 +46,17 @@ import com.stratum.core.designsystem.theme.Space
 import com.stratum.core.designsystem.theme.Stroke
 import com.stratum.core.designsystem.theme.StratumTheme
 import com.stratum.core.designsystem.theme.safeContent
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import com.stratum.core.domain.sprite.SpriteSheet
+import com.stratum.core.domain.sprite.WeaponFit
 import com.stratum.core.domain.sprite.WeaponKind
+import com.stratum.core.domain.sprite.WeaponLayer
+import com.stratum.core.domain.sprite.WeaponPosing
+import com.stratum.core.domain.sprite.WeaponSprite
 
 /**
  * Draw a weapon on its own, so anyone can carry it.
@@ -70,6 +81,7 @@ fun WeaponForgeScreen(
     onEquip: (String?) -> Unit = {},
     equippedId: String? = null,
     previewFor: (String) -> ImageBitmap? = { null },
+    sheetImageFor: (String) -> ImageBitmap? = { null },
 ) {
     LaunchedEffect(Unit) { viewModel.refresh() }
 
@@ -84,10 +96,15 @@ fun WeaponForgeScreen(
         onGenerate = viewModel::generate,
         onDelete = viewModel::delete,
         onEquip = onEquip,
+        onSelectFittingSheet = viewModel::selectFittingSheet,
+        onStepPreview = viewModel::stepPreview,
+        onNudgeFit = viewModel::nudgeFit,
+        onResetFit = viewModel::resetFit,
         onDismiss = viewModel::dismissMessage,
         onBack = onBack,
         onOpenSettings = onOpenSettings,
         previewFor = previewFor,
+        sheetImageFor = sheetImageFor,
     )
 }
 
@@ -101,10 +118,15 @@ fun WeaponForgeContent(
     onGenerate: () -> Unit = {},
     onDelete: (String) -> Unit = {},
     onEquip: (String?) -> Unit = {},
+    onSelectFittingSheet: (String) -> Unit = {},
+    onStepPreview: (Boolean) -> Unit = {},
+    onNudgeFit: (Float, Float, Float) -> Unit = { _, _, _ -> },
+    onResetFit: () -> Unit = {},
     onDismiss: () -> Unit = {},
     onBack: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     previewFor: (String) -> ImageBitmap? = { null },
+    sheetImageFor: (String) -> ImageBitmap? = { null },
 ) {
     val colors = StratumTheme.colors
 
@@ -308,8 +330,227 @@ fun WeaponForgeContent(
             }
         }
 
+        Spacer(Modifier.height(Space.medium))
+        FitPanel(
+            state = state,
+            previewFor = previewFor,
+            sheetImageFor = sheetImageFor,
+            onSelectFittingSheet = onSelectFittingSheet,
+            onStepPreview = onStepPreview,
+            onNudgeFit = onNudgeFit,
+            onResetFit = onResetFit,
+        )
+
         Spacer(Modifier.height(Space.huge))
     }
 }
 
+/**
+ * Where this character's hands actually are.
+ *
+ * The swing arcs are authored once and are the same for everybody, because the
+ * shape of a swing is. Proportions are not: measured on a generated warrior,
+ * the authored anchors put the hand a full hand's width outside the character.
+ * Rather than ask anyone to place twenty-four anchors per character — work
+ * nobody does twice — the character supplies three numbers and the arcs bend to
+ * fit.
+ */
+@Composable
+private fun FitPanel(
+    state: WeaponForgeUiState,
+    previewFor: (String) -> ImageBitmap?,
+    sheetImageFor: (String) -> ImageBitmap?,
+    onSelectFittingSheet: (String) -> Unit,
+    onStepPreview: (Boolean) -> Unit,
+    onNudgeFit: (Float, Float, Float) -> Unit,
+    onResetFit: () -> Unit,
+) {
+    val colors = StratumTheme.colors
+    val weaponId = state.equippedId ?: state.weapons.firstOrNull()?.id
+    val weapon = state.weapons.firstOrNull { it.id == weaponId }
+    val sheet = state.fittingSheet
+
+    StratumSection(
+        title = "Fit to a character",
+        subtitle = "Nudge until the grip sits in the hand. Saved per character, so every " +
+            "weapon this one picks up is held the same way.",
+    ) {
+        if (state.sheets.isEmpty() || weapon == null) {
+            Text(
+                text = "Needs a character sheet and a weapon. Draw one of each first.",
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.inkMuted,
+            )
+            return@StratumSection
+        }
+
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(Space.small),
+        ) {
+            state.sheets.forEach { candidate ->
+                StratumChip(
+                    label = candidate.name,
+                    selected = candidate.id == state.fittingSheetId,
+                    onClick = { onSelectFittingSheet(candidate.id) },
+                )
+            }
+        }
+
+        Spacer(Modifier.height(Space.medium))
+        StratumWell {
+            val body = sheet?.let { sheetImageFor(it.id) }
+            val blade = previewFor(weapon.id)
+            if (sheet == null || body == null || blade == null) {
+                Text(
+                    text = "That character's sheet could not be read.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.danger,
+                )
+            } else {
+                Box(
+                    modifier = Modifier.fillMaxWidth().height(FIT_PREVIEW),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    HeldWeaponPreview(
+                        sheet = sheet,
+                        body = body,
+                        weapon = weapon,
+                        blade = blade,
+                        frame = state.previewSheetFrame,
+                        fit = state.fit,
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(Space.small))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            StratumAction("Prev", { onStepPreview(false) }, emphasis = ActionEmphasis.QUIET)
+            Text(
+                text = "frame ${state.previewFrame + 1} of ${state.previewFrameCount}",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkMuted,
+            )
+            StratumAction("Next", { onStepPreview(true) }, emphasis = ActionEmphasis.QUIET)
+        }
+
+        Spacer(Modifier.height(Space.small))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(Space.small),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Hand",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkMuted,
+                modifier = Modifier.weight(1f),
+            )
+            StratumAction("←", { onNudgeFit(-NUDGE, 0f, 0f) }, emphasis = ActionEmphasis.QUIET)
+            StratumAction("↑", { onNudgeFit(0f, -NUDGE, 0f) }, emphasis = ActionEmphasis.QUIET)
+            StratumAction("↓", { onNudgeFit(0f, NUDGE, 0f) }, emphasis = ActionEmphasis.QUIET)
+            StratumAction("→", { onNudgeFit(NUDGE, 0f, 0f) }, emphasis = ActionEmphasis.QUIET)
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(Space.small),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Size",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkMuted,
+                modifier = Modifier.weight(1f),
+            )
+            StratumAction("−", { onNudgeFit(0f, 0f, -SCALE_STEP) }, emphasis = ActionEmphasis.QUIET)
+            StratumAction("+", { onNudgeFit(0f, 0f, SCALE_STEP) }, emphasis = ActionEmphasis.QUIET)
+            StratumAction("Reset", onResetFit, emphasis = ActionEmphasis.QUIET)
+        }
+
+        Spacer(Modifier.height(Space.small))
+        Text(
+            text = "offset %+.2f, %+.2f · size %.2fx".format(
+                state.fit.offsetX, state.fit.offsetY, state.fit.scale,
+            ),
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.inkMuted,
+        )
+    }
+}
+
+/** The renderer's own arithmetic, so what is tuned here is what gets drawn. */
+@Composable
+private fun HeldWeaponPreview(
+    sheet: SpriteSheet,
+    body: ImageBitmap,
+    weapon: WeaponSprite,
+    blade: ImageBitmap,
+    frame: Int,
+    fit: WeaponFit,
+) {
+    val rig = remember(sheet, fit) { WeaponPosing.rigFor(sheet, fit) }
+    val rect = remember(sheet, frame) { sheet.frameRect(frame) }
+    val anchor = rig.anchorFor(frame)
+
+    Canvas(Modifier.fillMaxWidth().height(FIT_PREVIEW)) {
+        val scale = minOf(
+            size.width / rect.width.coerceAtLeast(1),
+            size.height / rect.height.coerceAtLeast(1),
+        ) * PREVIEW_FILL
+        val drawWidth = rect.width * scale
+        val drawHeight = rect.height * scale
+        val left = (size.width - drawWidth) / 2f
+        val top = (size.height - drawHeight) / 2f
+
+        val paintBody: () -> Unit = {
+            drawImage(
+                image = body,
+                srcOffset = IntOffset(rect.left, rect.top),
+                srcSize = IntSize(rect.width, rect.height),
+                dstOffset = IntOffset(left.toInt(), top.toInt()),
+                dstSize = IntSize(drawWidth.toInt(), drawHeight.toInt()),
+                filterQuality = FilterQuality.None,
+            )
+        }
+        val paintWeapon: () -> Unit = {
+            if (anchor != null) {
+                val height = drawHeight * weapon.kind.reach * anchor.scale
+                val width = height * (blade.width.toFloat() / blade.height.coerceAtLeast(1))
+                val handX = left + anchor.xFraction * drawWidth
+                val handY = top + anchor.yFraction * drawHeight
+                withTransform({ rotate(anchor.rotationDegrees, Offset(handX, handY)) }) {
+                    drawImage(
+                        image = blade,
+                        dstOffset = IntOffset(
+                            (handX - weapon.gripX * width).toInt(),
+                            (handY - weapon.gripY * height).toInt(),
+                        ),
+                        dstSize = IntSize(
+                            width.toInt().coerceAtLeast(1),
+                            height.toInt().coerceAtLeast(1),
+                        ),
+                        filterQuality = FilterQuality.None,
+                    )
+                }
+            }
+        }
+
+        if (anchor?.layer == WeaponLayer.BEHIND) paintWeapon()
+        paintBody()
+        if (anchor?.layer == WeaponLayer.IN_FRONT) paintWeapon()
+    }
+}
+
 private val WEAPON_THUMB = 56.dp
+private val FIT_PREVIEW = 260.dp
+
+/** One nudge, as a fraction of the frame: small enough to land on a hand. */
+private const val NUDGE = 0.01f
+private const val SCALE_STEP = 0.05f
+private const val PREVIEW_FILL = 0.9f

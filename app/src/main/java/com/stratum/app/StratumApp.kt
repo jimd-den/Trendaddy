@@ -177,7 +177,9 @@ fun StratumApp(
                             DrawableWeapon(
                                 sprite = held.first,
                                 image = held.second,
-                                rig = rigs.getOrPut(found.id) { WeaponPosing.rigFor(found) },
+                                rig = rigs.getOrPut(found.id) {
+                                    WeaponPosing.rigFor(found, ai.weaponFits.fitFor(found.id))
+                                },
                             )
                         } else {
                             null
@@ -379,6 +381,14 @@ fun StratumApp(
                         }
                     },
                     loadWeapons = ai.weapons::all,
+                    loadSheets = { spriteSheets },
+                    fitFor = ai.weaponFits::fitFor,
+                    saveFit = { sheetId, fit ->
+                        ai.weaponFits.save(sheetId, fit)
+                        // The resolver caches rigs, so it has to be rebuilt for
+                        // a corrected fit to reach the world.
+                        spriteRevision++
+                    },
                     deleteWeapon = { id ->
                         ai.weapons.delete(id)
                         if (equippedWeaponId == id) equippedWeaponId = null
@@ -394,6 +404,7 @@ fun StratumApp(
                 onEquip = { id -> equippedWeaponId = id },
                 equippedId = equippedWeaponId,
                 previewFor = { id -> ai.weapons.bitmapFor(id)?.asImageBitmap() },
+                sheetImageFor = { id -> ai.sprites.drawableBitmapFor(id)?.asImageBitmap() },
             )
         }
 

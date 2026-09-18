@@ -232,6 +232,16 @@ of the fist every frame. And it is painted inside the same mirror transform as
 the body, so a character facing the other way holds it in the other hand for
 free.
 
+The arcs cannot be authored accurately, and `WeaponFit` is the answer to that.
+Replaying the renderer's arithmetic over real generated art showed the first set
+of anchors putting the hand a full hand's width outside the character, and the
+blade sized like a greatsword. The shape of a swing is universal — back and up,
+down and across — but a figure's proportions are not, and neither is how large
+it was drawn in its cell. So the arcs stay authored and each character supplies
+three numbers: two offsets and a scale, tuned once against its own attack and
+saved per sheet. Authoring twenty-four anchors per character is work nobody does
+twice; deriving them means finding a hand in a drawing.
+
 Weapons are the one piece of art deliberately **not** drawn at the game's camera
 angle. They are drawn flat and upright, tip at the top, because they get rotated
 through a swing: a blade foreshortened for the isometric view is correct at one

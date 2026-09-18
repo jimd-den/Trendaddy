@@ -6,6 +6,7 @@ import com.stratum.core.data.ai.OpenRouterLanguageModel
 import com.stratum.core.data.sprite.SpriteLibrary
 import com.stratum.core.data.sprite.PoseLibrary
 import com.stratum.core.data.sprite.SpriteProjectStore
+import com.stratum.core.data.sprite.WeaponFitStore
 import com.stratum.core.data.sprite.WeaponLibrary
 import com.stratum.core.data.settings.ProviderSettingsStore
 import com.stratum.core.domain.ai.GenerateContentPackUseCase
@@ -51,6 +52,9 @@ class AiWiring(context: Context) {
      * every actor in the game rather than belonging to whoever it was drawn on.
      */
     val weapons = WeaponLibrary(context)
+
+    /** How each character holds a weapon: its hands, not the weapon's. */
+    val weaponFits = WeaponFitStore(context)
 
     val generateContentPack = GenerateContentPackUseCase(languageModel)
 

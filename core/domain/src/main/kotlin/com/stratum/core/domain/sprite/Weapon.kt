@@ -19,19 +19,31 @@ enum class WeaponKind(
      * so the grip is always low and centred — but not identically. A sword is
      * held just above the pommel; a staff is held a third of the way up; an axe
      * is held low on a long haft.
+     *
+     * Measured on a generated blade: tip to pommel spanned the drawing, the
+     * grip sat about 82% of the way down, and the first guess of 88% put the
+     * hand on the pommel itself.
      */
     val gripY: Float,
-    /** How long it reads on screen, relative to the character's height. */
+    /**
+     * How long it reads on screen, relative to the character's height.
+     *
+     * Measured against real art rather than guessed, after the first set came
+     * out greatsword-sized on everything: a one-handed blade that reaches
+     * two-thirds of a person's height is a two-handed blade. These are the
+     * fractions a weapon of each kind actually occupies standing next to a
+     * figure.
+     */
     val reach: Float,
 ) {
-    SWORD("Sword", "a one-handed sword with a straight or curved blade, a crossguard and a pommel", 0.88f, 0.62f),
-    AXE("Axe", "a one-handed axe: a heavy head on a shaft, the head at the top", 0.86f, 0.58f),
-    MACE("Mace", "a one-handed mace or club, heaviest at the top", 0.87f, 0.55f),
-    DAGGER("Dagger", "a short dagger with a narrow blade", 0.85f, 0.34f),
-    SPEAR("Spear", "a long spear: a narrow point on a long straight shaft", 0.72f, 0.95f),
-    STAFF("Staff", "a long staff or quarterstaff, the same thickness along its length", 0.65f, 0.92f),
-    BOW("Bow", "a bow, the stave curving away from the string, held at its middle", 0.5f, 0.7f),
-    SHIELD("Shield", "a shield seen from the front, its face towards the viewer", 0.5f, 0.45f),
+    SWORD("Sword", "a one-handed sword with a straight or curved blade, a crossguard and a pommel", 0.82f, 0.46f),
+    AXE("Axe", "a one-handed axe: a heavy head on a shaft, the head at the top", 0.8f, 0.44f),
+    MACE("Mace", "a one-handed mace or club, heaviest at the top", 0.82f, 0.4f),
+    DAGGER("Dagger", "a short dagger with a narrow blade", 0.8f, 0.24f),
+    SPEAR("Spear", "a long spear: a narrow point on a long straight shaft", 0.68f, 0.82f),
+    STAFF("Staff", "a long staff or quarterstaff, the same thickness along its length", 0.6f, 0.8f),
+    BOW("Bow", "a bow, the stave curving away from the string, held at its middle", 0.5f, 0.5f),
+    SHIELD("Shield", "a shield seen from the front, its face towards the viewer", 0.5f, 0.3f),
     ;
 
     /** The grip is centred on every kind; only its height along the weapon differs. */
@@ -112,6 +124,46 @@ data class WeaponRig(val anchors: Map<Int, WeaponAnchor> = emptyMap()) {
 }
 
 /**
+ * One character's correction to the authored arcs.
+ *
+ * The arcs are universal — a wind-up goes back and up behind the shoulder for
+ * every character who has ever swung anything — but the *proportions* are not.
+ * A stocky figure holds a weapon lower and nearer the centre line than a lanky
+ * one, and a sheet packed at a different fill fraction shifts everything again.
+ * Measured on a generated warrior, the first authored anchors put the hand a
+ * hand's width outside the character entirely.
+ *
+ * So the shape of the swing stays authored and the character supplies three
+ * numbers. That is a far better split than either extreme: authoring twenty-four
+ * anchors per character is work nobody will do twice, and deriving them from the
+ * art means finding a hand in a drawing.
+ */
+data class WeaponFit(
+    /** Added to every anchor, as a fraction of the frame. */
+    val offsetX: Float = 0f,
+    val offsetY: Float = 0f,
+    /** Multiplies the weapon's reach, for a character drawn larger or smaller in its cell. */
+    val scale: Float = 1f,
+) {
+    fun applyTo(anchor: WeaponAnchor): WeaponAnchor = anchor.copy(
+        xFraction = anchor.xFraction + offsetX,
+        yFraction = anchor.yFraction + offsetY,
+        scale = anchor.scale * scale,
+    )
+
+    val isIdentity: Boolean get() = offsetX == 0f && offsetY == 0f && scale == 1f
+
+    companion object {
+        val none = WeaponFit()
+
+        /** Wider than this and the weapon is not being corrected, it is being lost. */
+        const val MAX_OFFSET = 0.35f
+        const val MIN_SCALE = 0.3f
+        const val MAX_SCALE = 3f
+    }
+}
+
+/**
  * Where a weapon goes for each pose the pipeline knows how to ask for.
  *
  * Authored rather than derived, for the same reason the pose instructions are:
@@ -147,8 +199,8 @@ object WeaponPosing {
 
             // A skill is held out in front in both hands rather than swung.
             AnimationState.SPECIAL -> WeaponAnchor(
-                xFraction = 0.56f,
-                yFraction = 0.46f - 0.06f * kotlin.math.sin(progress * PI_F),
+                xFraction = 0.5f,
+                yFraction = 0.4f - 0.06f * kotlin.math.sin(progress * PI_F),
                 rotationDegrees = -20f + 30f * progress,
                 scale = 1f + 0.08f * kotlin.math.sin(progress * PI_F),
                 layer = WeaponLayer.IN_FRONT,
@@ -156,16 +208,16 @@ object WeaponPosing {
 
             // Flung wide by the hit, but not let go of.
             AnimationState.HURT -> WeaponAnchor(
-                xFraction = 0.72f + 0.05f * progress,
-                yFraction = 0.62f,
+                xFraction = 0.64f + 0.04f * progress,
+                yFraction = 0.55f,
                 rotationDegrees = 170f + 25f * progress,
                 layer = WeaponLayer.BEHIND,
             )
 
             // Tucked in tight against the body through the roll.
             AnimationState.ROLL -> WeaponAnchor(
-                xFraction = 0.55f,
-                yFraction = 0.6f,
+                xFraction = 0.52f,
+                yFraction = 0.55f,
                 rotationDegrees = 150f,
                 scale = 0.95f,
                 layer = WeaponLayer.BEHIND,
@@ -176,8 +228,8 @@ object WeaponPosing {
             // looks unfinished.
             AnimationState.DIE -> if (progress < DROP_AT) {
                 WeaponAnchor(
-                    xFraction = 0.68f,
-                    yFraction = 0.62f + 0.1f * progress,
+                    xFraction = 0.6f,
+                    yFraction = 0.56f + 0.1f * progress,
                     rotationDegrees = 150f + 40f * progress,
                     layer = WeaponLayer.BEHIND,
                 )
@@ -188,21 +240,28 @@ object WeaponPosing {
     }
 
     /** Every anchor for a laid-out sheet, ready to hang on it. */
-    fun rigFor(sheet: SpriteSheet): WeaponRig = WeaponRig(
+    fun rigFor(sheet: SpriteSheet, fit: WeaponFit = WeaponFit.none): WeaponRig = WeaponRig(
         buildMap {
             for (clip in sheet.clips) {
                 for (step in 0 until clip.frameCount) {
                     val anchor = anchorFor(clip.state, step, clip.frameCount) ?: continue
-                    put(clip.firstFrame + step, anchor)
+                    put(clip.firstFrame + step, fit.applyTo(anchor))
                 }
             }
         },
     )
 
-    /** Hanging at the side, which is where a weapon spends most of its life. */
+    /**
+     * Hanging at the side, which is where a weapon spends most of its life.
+     *
+     * Nearer the body than the first attempt. Hands sit closer to the centre
+     * line than they look like they do: measured on a generated figure the
+     * fist was at 0.47 across, where this had been placing the weapon at 0.68 —
+     * a hand's width outside the character entirely.
+     */
     private fun rest(bob: Float) = WeaponAnchor(
-        xFraction = 0.68f,
-        yFraction = 0.6f + bob,
+        xFraction = 0.6f,
+        yFraction = 0.54f + bob,
         rotationDegrees = 155f,
         layer = WeaponLayer.BEHIND,
     )
@@ -220,8 +279,10 @@ object WeaponPosing {
         // is the moment the swing stops being a wind-up and starts being a hit.
         val layer = if (degrees < CROSSES_AT) WeaponLayer.BEHIND else WeaponLayer.IN_FRONT
         return WeaponAnchor(
-            xFraction = lerp(0.62f, 0.4f, progress),
-            yFraction = lerp(0.3f, 0.66f, ease(progress)),
+            // Hands stay near the centre line through a swing; they do not
+            // travel nearly as far across the body as they appear to.
+            xFraction = lerp(0.55f, 0.44f, progress),
+            yFraction = lerp(0.24f, 0.5f, ease(progress)),
             rotationDegrees = degrees,
             scale = 1f + 0.1f * kotlin.math.sin(progress * PI_F),
             layer = layer,
