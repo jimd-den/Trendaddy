@@ -173,6 +173,8 @@ private data class ClipDto(
     val frameCount: Int,
     val frameDurationMs: Int,
     val loops: Boolean,
+    /** Null for every sheet written before clips could be borrowed. */
+    val standsInFor: String? = null,
 )
 
 private fun SpriteSheet.toDto() = SheetDto(
@@ -185,7 +187,14 @@ private fun SpriteSheet.toDto() = SheetDto(
     origin = origin.name,
     mirrorsFacings = mirrorsFacings,
     clips = clips.map {
-        ClipDto(it.state.name, it.firstFrame, it.frameCount, it.frameDurationMs, it.loops)
+        ClipDto(
+            state = it.state.name,
+            firstFrame = it.firstFrame,
+            frameCount = it.frameCount,
+            frameDurationMs = it.frameDurationMs,
+            loops = it.loops,
+            standsInFor = it.standsInFor?.name,
+        )
     },
 )
 
@@ -202,7 +211,15 @@ private fun SheetDto.toDomain() = SpriteSheet(
         val state = runCatching { AnimationState.valueOf(dto.state) }.getOrNull()
             ?: return@mapNotNull null
         runCatching {
-            AnimationClip(state, dto.firstFrame, dto.frameCount, dto.frameDurationMs, dto.loops)
+            AnimationClip(
+                state = state,
+                firstFrame = dto.firstFrame,
+                frameCount = dto.frameCount,
+                frameDurationMs = dto.frameDurationMs,
+                loops = dto.loops,
+                standsInFor = dto.standsInFor
+                    ?.let { name -> runCatching { AnimationState.valueOf(name) }.getOrNull() },
+            )
         }.getOrNull()
     },
 )

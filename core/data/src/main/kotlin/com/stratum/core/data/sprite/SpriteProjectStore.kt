@@ -135,6 +135,8 @@ private data class MappingDto(
     val frameIds: List<String>,
     val frameDurationMs: Int,
     val loops: Boolean,
+    /** Null for a clip whose frames were chosen rather than borrowed. */
+    val borrowedFrom: String? = null,
 )
 
 private fun SpriteAtlas.toDto() = AtlasDto(
@@ -156,7 +158,15 @@ private fun SpriteAtlas.toDto() = AtlasDto(
             label = it.label,
         )
     },
-    clips = clips.map { MappingDto(it.state.name, it.frameIds, it.frameDurationMs, it.loops) },
+    clips = clips.map {
+        MappingDto(
+            state = it.state.name,
+            frameIds = it.frameIds,
+            frameDurationMs = it.frameDurationMs,
+            loops = it.loops,
+            borrowedFrom = it.borrowedFrom?.name,
+        )
+    },
     facing = facing.name,
     role = role.name,
     origin = origin.name,
@@ -187,7 +197,14 @@ private fun AtlasDto.toDomain() = SpriteAtlas(
     clips = clips.mapNotNull { dto ->
         val state = runCatching { AnimationState.valueOf(dto.state) }.getOrNull()
             ?: return@mapNotNull null
-        ClipMapping(state, dto.frameIds, dto.frameDurationMs, dto.loops)
+        ClipMapping(
+            state = state,
+            frameIds = dto.frameIds,
+            frameDurationMs = dto.frameDurationMs,
+            loops = dto.loops,
+            borrowedFrom = dto.borrowedFrom
+                ?.let { name -> runCatching { AnimationState.valueOf(name) }.getOrNull() },
+        )
     },
     facing = runCatching { FacingLayout.valueOf(facing) }.getOrDefault(FacingLayout.MIRRORED),
     role = runCatching { ActorRole.valueOf(role) }.getOrDefault(ActorRole.MONSTER),

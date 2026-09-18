@@ -112,6 +112,7 @@ object AtlasBaker {
                 frameCount = frames.size,
                 frameDurationMs = mapping?.frameDurationMs ?: state.defaultFrameDurationMs,
                 loops = mapping?.loops ?: (state !in AnimationState.oneShot),
+                standsInFor = mapping?.borrowedFrom,
             )
         }
 

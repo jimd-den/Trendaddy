@@ -152,6 +152,32 @@ Baking is one-way, so `SpriteProjectStore` keeps the working file: the untouched
 source image beside the mapping. Re-cutting a sheet never destroys the image it
 was cut from.
 
+`FrameGeometry` is the escape hatch from grids altogether. A collage, a figure
+drawn twice at different scales, one good pose in the corner of an image that
+was never a sheet — no arrangement of columns, margins and gutters describes any
+of them, so frames can also be placed and sized one at a time. Hand-placed
+frames are marked, because re-slicing rebuilds frames from grid positions and a
+rectangle someone drew has none; without the mark, changing the column count
+would delete their work.
+
+## Why the renderer makes up the difference
+
+Letting a rat's death borrow its idle keeps a dungeon shippable. On its own it
+also ships a rat that stands still and then vanishes, which reads as a bug
+rather than a death — worse than the missing animation it was meant to cover.
+
+So a borrowed clip says so. `ClipMapping.borrowedFrom` survives baking as
+`AnimationClip.standsInFor` and reaches the renderer, which asks
+`ProceduralMotion` what to lay over the frame: a body that sags, spreads and
+fades reads as dying even when every frame of it is the idle pose. The same
+mechanism gives a held still its breath and a borrowed walk its step.
+
+The guard is what keeps it honest: nothing is applied to a clip with real frames
+behind it. A drawn attack does not want a procedural lunge fighting it, and a
+game where both happen looks like it is made of rubber. The effect fires only
+where there is nothing to fight — a clip standing in for another, or a single
+frame held as an animation.
+
 ## Determinism
 
 The world seed drives one `Random` for the whole session, so a run replays

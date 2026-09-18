@@ -40,7 +40,9 @@ import com.stratum.core.designsystem.component.StratumPanel
 import com.stratum.core.designsystem.component.StratumWell
 import com.stratum.core.designsystem.theme.Space
 import com.stratum.core.domain.ai.GenerationStage
+import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.sprite.KeyStrategy
+import com.stratum.core.domain.sprite.SpriteValidation
 import com.stratum.core.designsystem.theme.safeContent
 import com.stratum.core.designsystem.theme.StratumTheme
 import com.stratum.core.domain.sprite.SpriteSheet
@@ -76,6 +78,7 @@ fun SpriteForgeScreen(
         onStyleChange = viewModel::updateStyle,
         onStylePreset = viewModel::selectStyle,
         onTargetChange = viewModel::selectTarget,
+        onActionChange = viewModel::selectAction,
         onGenerate = viewModel::generate,
         onDelete = viewModel::delete,
         onBack = onBack,
@@ -94,6 +97,7 @@ fun SpriteForgeContent(
     onStyleChange: (String) -> Unit = {},
     onStylePreset: (SpriteStyle) -> Unit = {},
     onTargetChange: (SpriteTarget) -> Unit = {},
+    onActionChange: (AnimationState) -> Unit = {},
     onGenerate: () -> Unit = {},
     onDelete: (String) -> Unit = {},
     onBack: () -> Unit = {},
@@ -156,13 +160,53 @@ fun SpriteForgeContent(
         Spacer(Modifier.height(Space.large))
 
         StratumPanel(modifier = Modifier.fillMaxWidth()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(Space.small)) {
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(Space.small),
+            ) {
                 SpriteTarget.entries.forEach { target ->
                     StratumChip(
                         label = target.label,
                         selected = state.target == target,
                         onClick = { onTargetChange(target) },
                     )
+                }
+            }
+
+            // A smaller ask is a better ask. Said plainly, because the default
+            // is the largest one and a player has no way to know that asking
+            // for less is how you get art that is worth keeping.
+            Spacer(Modifier.height(Space.small))
+            Text(
+                text = when (state.target) {
+                    SpriteTarget.HERO ->
+                        "Seven animations in one image. The most to go wrong, and the most " +
+                            "to keep when it does not."
+                    SpriteTarget.MONSTER -> "Four animations in one image."
+                    SpriteTarget.ACTION ->
+                        "Six frames of one action. Much likelier to come back usable than a " +
+                            "full sheet, and the frame mapper turns it into a clip."
+                    SpriteTarget.POSE ->
+                        "One drawing. The renderer will bob, flinch and fade it, which is " +
+                            "enough for a prop or a first look at a character."
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkMuted,
+            )
+
+            if (state.target.usesAction) {
+                Spacer(Modifier.height(Space.small))
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(Space.small),
+                ) {
+                    AnimationState.entries.forEach { action ->
+                        StratumChip(
+                            label = SpriteValidation.name(action),
+                            selected = state.action == action,
+                            onClick = { onActionChange(action) },
+                        )
+                    }
                 }
             }
 

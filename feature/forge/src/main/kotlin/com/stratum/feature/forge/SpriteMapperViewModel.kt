@@ -7,7 +7,10 @@ import com.stratum.core.domain.sprite.AnimationFallback
 import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.sprite.AtlasBaker
 import com.stratum.core.domain.sprite.FacingLayout
+import com.stratum.core.domain.sprite.FrameGeometry
 import com.stratum.core.domain.sprite.FramePivot
+import com.stratum.core.domain.sprite.FrameRef
+import com.stratum.core.domain.sprite.SourceRect
 import com.stratum.core.domain.sprite.SheetGrid
 import com.stratum.core.domain.sprite.SliceSpec
 import com.stratum.core.domain.sprite.SpriteAtlas
@@ -82,7 +85,13 @@ class SpriteMapperViewModel(
 
     fun close() {
         undo.clear()
-        _state.value = _state.value.copy(atlas = null, slice = null, savedSheet = null, message = null)
+        _state.value = _state.value.copy(
+            atlas = null,
+            slice = null,
+            savedSheet = null,
+            message = null,
+            focusFrameId = null,
+        )
     }
 
     // ---- the grid --------------------------------------------------------
@@ -104,7 +113,37 @@ class SpriteMapperViewModel(
             offsetY = offsetY.coerceAtLeast(0),
             gutterX = gutterX.coerceAtLeast(0),
             gutterY = gutterY.coerceAtLeast(0),
-        ) ?: run {
+        )
+        applySlice(spec)
+    }
+
+    /**
+     * Sets the grid from the cell size instead of the column count.
+     *
+     * How downloaded art is actually described -- an LPC sheet is "64 by 64
+     * frames", never "thirteen columns by twenty-one rows". Counting rows by
+     * eye on a sheet that size is a guess; the cell size is on the download
+     * page.
+     */
+    fun setCellSize(pixels: Int) {
+        val atlas = _state.value.atlas ?: return
+        val current = _state.value.slice
+        applySlice(
+            SliceSpec.ofCellSize(
+                cellWidth = pixels,
+                cellHeight = pixels,
+                imageWidth = atlas.sourceWidth,
+                imageHeight = atlas.sourceHeight,
+                offsetX = current?.offsetX ?: 0,
+                offsetY = current?.offsetY ?: 0,
+                gutterX = current?.gutterX ?: 0,
+                gutterY = current?.gutterY ?: 0,
+            ),
+        )
+    }
+
+    private fun applySlice(spec: SliceSpec?) {
+        if (spec == null) {
             // The numbers no longer describe a grid that fits on the image.
             // Refusing is better than silently snapping back to something the
             // person did not ask for and cannot see they did not get.
@@ -126,7 +165,20 @@ class SpriteMapperViewModel(
 
     fun duplicateFrame(frameId: String) = edit { it.duplicateFrame(frameId) }
 
-    fun removeFrame(frameId: String) = edit { it.removeFrame(frameId) }
+    fun removeFrame(frameId: String) {
+        val at = _state.value.atlas?.frames?.indexOfFirst { it.id == frameId } ?: -1
+        edit(clearsBake = true) { it.removeFrame(frameId) }
+        if (_state.value.focusFrameId != frameId) return
+
+        // Deleting a junk cell mid-sweep should carry on to the next one, not
+        // throw the person back to the contact sheet to find their place again.
+        // The frame that slid into this index is the next one; when the last
+        // frame went, there is nothing left to step to.
+        val remaining = _state.value.atlas?.frames.orEmpty()
+        _state.value = _state.value.copy(
+            focusFrameId = remaining.getOrNull(at.coerceAtMost(remaining.size - 1))?.id,
+        )
+    }
 
     /** Steps a frame's anchor round the three that matter, rather than opening a menu. */
     fun cyclePivot(frameId: String) = edit { atlas ->
@@ -154,6 +206,100 @@ class SpriteMapperViewModel(
         _state.value = _state.value.copy(
             message = "Frames trimmed to their content and blank cells switched off.",
             error = null,
+        )
+    }
+
+    // ---- one frame at a time ---------------------------------------------
+
+    /**
+     * Opens the large view on one frame.
+     *
+     * The contact sheet is for deciding which cells are art; this is for the
+     * ones that are nearly right. At sixteen frames across a phone a cell is
+     * about sixty pixels, which is enough to see that a hand is clipped and
+     * nowhere near enough to fix it.
+     */
+    fun focusFrame(frameId: String) {
+        val atlas = _state.value.atlas ?: return
+        if (atlas.frame(frameId) == null) return
+        _state.value = _state.value.copy(focusFrameId = frameId, error = null)
+    }
+
+    fun closeFrame() {
+        _state.value = _state.value.copy(focusFrameId = null)
+    }
+
+    /**
+     * Steps to the next or previous frame, wrapping.
+     *
+     * Wrapping rather than stopping at the ends because the gesture this
+     * supports is working straight through a sheet: press next, fix, press
+     * next. An end that refuses to move reads as the button having broken, and
+     * there is nothing at the end of a sheet worth protecting.
+     */
+    fun stepFrame(forward: Boolean) {
+        val atlas = _state.value.atlas ?: return
+        if (atlas.frames.isEmpty()) return
+        val at = atlas.frames.indexOfFirst { it.id == _state.value.focusFrameId }
+        val count = atlas.frames.size
+        val next = when {
+            at < 0 -> 0
+            forward -> (at + 1) % count
+            else -> (at - 1 + count) % count
+        }
+        _state.value = _state.value.copy(focusFrameId = atlas.frames[next].id)
+    }
+
+    /** How far one press of a nudge or resize button moves an edge. */
+    fun setStep(pixels: Int) {
+        _state.value = _state.value.copy(step = pixels.coerceIn(1, MAX_STEP))
+    }
+
+    fun nudgeFrame(dx: Int, dy: Int) {
+        val id = _state.value.focusFrameId ?: return
+        edit(clearsBake = true) { FrameGeometry.move(it, id, dx, dy) }
+    }
+
+    fun resizeFrame(left: Int = 0, top: Int = 0, right: Int = 0, bottom: Int = 0) {
+        val id = _state.value.focusFrameId ?: return
+        edit(clearsBake = true) { FrameGeometry.expand(it, id, left, top, right, bottom) }
+    }
+
+    fun setFrameRect(rect: SourceRect) {
+        val id = _state.value.focusFrameId ?: return
+        edit(clearsBake = true) { FrameGeometry.setRect(it, id, rect) }
+    }
+
+    /** Shrinks the open frame to what is drawn in it, leaving the rest alone. */
+    fun snapFrameToContent() {
+        val atlas = _state.value.atlas ?: return
+        val id = _state.value.focusFrameId ?: return
+        val pixels = sourcePixels(atlas)
+        if (pixels == null) {
+            _state.value = _state.value.copy(error = "The source image could not be read.")
+            return
+        }
+        edit(clearsBake = true) { FrameGeometry.snapToContent(it, id, pixels) }
+    }
+
+    /**
+     * A frame nobody's grid placed, opened straight away.
+     *
+     * This is the escape hatch from grids altogether: a collage, a character
+     * drawn twice at different sizes, one good pose in the corner of a picture.
+     * It lands beside the frame being looked at so there is something to drag
+     * from rather than a rectangle to hunt for.
+     */
+    fun addFrame() {
+        val atlas = _state.value.atlas ?: return
+        val near = atlas.frame(_state.value.focusFrameId ?: "")
+        val rect = FrameGeometry.nextFreeRect(atlas, near)
+        val before = atlas.frames.map { it.id }.toSet()
+        edit(clearsBake = true) { FrameGeometry.addFrame(it, rect) }
+        val added = _state.value.atlas?.frames?.firstOrNull { it.id !in before }
+        _state.value = _state.value.copy(
+            focusFrameId = added?.id ?: _state.value.focusFrameId,
+            message = if (added != null) "New frame added. Size it, then add it to a state." else null,
         )
     }
 
@@ -210,6 +356,9 @@ class SpriteMapperViewModel(
             atlas = previous,
             report = SpriteValidation.validate(previous),
             savedSheet = null,
+            // Undoing past the point a frame was added would otherwise leave
+            // the large view open on a frame that no longer exists.
+            focusFrameId = _state.value.focusFrameId?.takeIf { previous.frame(it) != null },
         )
     }
 
@@ -293,6 +442,9 @@ class SpriteMapperViewModel(
     companion object {
         /** More divisions than this on a phone screen is a grid nobody can tap. */
         const val MAX_DIVISIONS = 16
+
+        /** Larger than this a nudge is a throw, not an adjustment. */
+        const val MAX_STEP = 64
         const val MIN_FPS = 1f
         const val MAX_FPS = 30f
         private const val UNDO_DEPTH = 40
@@ -324,8 +476,19 @@ data class SpriteMapperUiState(
     val savedSheet: SpriteSheet? = null,
     val message: String? = null,
     val error: String? = null,
+    /** Set while one frame is open in the large view. */
+    val focusFrameId: String? = null,
+    /** How far one press of a nudge or resize button moves an edge, in pixels. */
+    val step: Int = 4,
 ) {
     val isEditing: Boolean get() = atlas != null
+
+    val focusFrame: FrameRef? get() = focusFrameId?.let { atlas?.frame(it) }
+
+    /** Which frame of how many, for a person working straight through a sheet. */
+    val focusIndex: Int get() = atlas?.frames?.indexOfFirst { it.id == focusFrameId } ?: -1
+
+    val frameCount: Int get() = atlas?.frames?.size ?: 0
 
     /** The frames of the open state, in play order, for the strip and the preview. */
     val activeFrames get() = atlas?.framesOf(activeState).orEmpty()

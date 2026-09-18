@@ -122,11 +122,27 @@ fun SpriteMapperScreen(
                         gutterY = action.gutterY ?: slice?.gutterY ?: 0,
                     )
                 }
+                is SpriteMapperAction.SetCellSize -> viewModel.setCellSize(action.pixels)
                 SpriteMapperAction.TrimToContent -> viewModel.trimToContent()
                 is SpriteMapperAction.ToggleFrame -> viewModel.toggleFrame(action.frameId)
                 is SpriteMapperAction.FlipFrame -> viewModel.flipFrame(action.frameId)
                 is SpriteMapperAction.CyclePivot -> viewModel.cyclePivot(action.frameId)
                 is SpriteMapperAction.DuplicateFrame -> viewModel.duplicateFrame(action.frameId)
+                is SpriteMapperAction.OpenFrame -> viewModel.focusFrame(action.frameId)
+                SpriteMapperAction.CloseFrame -> viewModel.closeFrame()
+                is SpriteMapperAction.StepFrame -> viewModel.stepFrame(action.forward)
+                is SpriteMapperAction.SetStep -> viewModel.setStep(action.pixels)
+                is SpriteMapperAction.NudgeFrame -> viewModel.nudgeFrame(action.dx, action.dy)
+                is SpriteMapperAction.ResizeFrame -> viewModel.resizeFrame(
+                    left = action.left,
+                    top = action.top,
+                    right = action.right,
+                    bottom = action.bottom,
+                )
+                is SpriteMapperAction.SetFrameRect -> viewModel.setFrameRect(action.rect)
+                SpriteMapperAction.SnapFrameToContent -> viewModel.snapFrameToContent()
+                SpriteMapperAction.AddFrame -> viewModel.addFrame()
+                is SpriteMapperAction.RemoveFrame -> viewModel.removeFrame(action.frameId)
                 is SpriteMapperAction.SelectState -> viewModel.selectState(action.state)
                 is SpriteMapperAction.AddToClip -> viewModel.addToActiveClip(action.frameId)
                 is SpriteMapperAction.RemoveFromClip -> viewModel.removeFromActiveClip(action.index)
@@ -156,6 +172,19 @@ fun SpriteMapperContent(
 ) {
     val colors = StratumTheme.colors
     val atlas = state.atlas
+
+    // One frame open means one frame on screen. Showing the large view inside
+    // the scrolling editor would put the thing being worked on in a window
+    // half the size of the controls for it.
+    if (atlas != null && state.focusFrame != null) {
+        FrameStudio(
+            state = state,
+            source = source,
+            modifier = modifier,
+            onAction = onAction,
+        )
+        return
+    }
 
     Column(
         modifier = modifier
@@ -359,6 +388,28 @@ private fun GridPanel(slice: SliceSpec?, onAction: (SpriteMapperAction) -> Unit)
             )
         },
     ) {
+        // Offered before the column count, because a person who knows their
+        // cell size knows it exactly, and a person counting columns on a
+        // twenty-one row sheet is guessing.
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(Space.small),
+        ) {
+            Text(
+                text = "Cells",
+                style = MaterialTheme.typography.labelSmall,
+                color = StratumTheme.colors.inkMuted,
+            )
+            CELL_SIZES.forEach { pixels ->
+                StratumChip(
+                    label = "${pixels}px",
+                    selected = slice.cellWidth == pixels && slice.cellHeight == pixels,
+                    onClick = { onAction(SpriteMapperAction.SetCellSize(pixels)) },
+                )
+            }
+        }
+
+        Spacer(Modifier.height(Space.small))
         Stepper("Columns", slice.columns) { onAction(SpriteMapperAction.SetGrid(columns = it)) }
         Stepper("Rows", slice.rows) { onAction(SpriteMapperAction.SetGrid(rows = it)) }
         Stepper("Margin across", slice.offsetX, step = 2) {
@@ -377,7 +428,8 @@ private fun GridPanel(slice: SliceSpec?, onAction: (SpriteMapperAction) -> Unit)
         Spacer(Modifier.height(Space.small))
         Text(
             text = "Trim shrinks every cell to what is drawn in it and switches the blank ones " +
-                "off. It is also what makes the feet line up when the frames are packed.",
+                "off. It is also what makes the feet line up when the frames are packed. " +
+                "For art no grid describes, open a frame and size it by hand.",
             style = MaterialTheme.typography.labelSmall,
             color = StratumTheme.colors.inkMuted,
         )
@@ -473,18 +525,15 @@ private fun ContactSheet(
                             color = if (frame.enabled) colors.inkMuted else colors.hairline,
                             maxLines = 1,
                         )
+                        // Two, not five. Everything else a single frame needs
+                        // is in the large view, where there is room to see what
+                        // it did.
                         Row(horizontalArrangement = Arrangement.spacedBy(Space.hair)) {
                             TinyButton(if (frame.enabled) "off" else "on") {
                                 onAction(SpriteMapperAction.ToggleFrame(frame.id))
                             }
-                            TinyButton(if (frame.flippedX) "◀" else "▶") {
-                                onAction(SpriteMapperAction.FlipFrame(frame.id))
-                            }
-                            TinyButton(frame.pivot.label.take(1)) {
-                                onAction(SpriteMapperAction.CyclePivot(frame.id))
-                            }
-                            TinyButton("+1") {
-                                onAction(SpriteMapperAction.DuplicateFrame(frame.id))
+                            TinyButton("edit") {
+                                onAction(SpriteMapperAction.OpenFrame(frame.id))
                             }
                         }
                     }
@@ -625,6 +674,10 @@ private fun ClipPanel(
                                 onAction(SpriteMapperAction.MoveInClip(index, index + 1))
                             }
                         }
+                        // The frame that looks wrong in a preview is the one to
+                        // open, and this is where a person is looking when they
+                        // notice it.
+                        TinyButton("edit") { onAction(SpriteMapperAction.OpenFrame(frame.id)) }
                     }
                 }
             }
@@ -883,6 +936,12 @@ private fun Notice(
         }
     }
 }
+
+/**
+ * The frame sizes sprite art is actually published at. 64 is the LPC standard
+ * and by far the most common thing anyone imports.
+ */
+private val CELL_SIZES = listOf(16, 32, 48, 64, 96, 128)
 
 /** Four across fits a phone; five makes the cells too small to judge. */
 private const val FRAMES_PER_ROW = 4

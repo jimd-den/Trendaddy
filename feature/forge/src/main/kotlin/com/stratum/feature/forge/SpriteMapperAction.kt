@@ -3,6 +3,7 @@ package com.stratum.feature.forge
 import com.stratum.core.domain.sprite.ActorRole
 import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.sprite.FacingLayout
+import com.stratum.core.domain.sprite.SourceRect
 import com.stratum.core.domain.sprite.SpriteSheet
 
 /**
@@ -28,12 +29,35 @@ sealed interface SpriteMapperAction {
         val gutterY: Int? = null,
     ) : SpriteMapperAction
 
+    /** Sets the grid from the cell size, the way downloaded art is described. */
+    data class SetCellSize(val pixels: Int) : SpriteMapperAction
+
     data object TrimToContent : SpriteMapperAction
 
     data class ToggleFrame(val frameId: String) : SpriteMapperAction
     data class FlipFrame(val frameId: String) : SpriteMapperAction
     data class CyclePivot(val frameId: String) : SpriteMapperAction
     data class DuplicateFrame(val frameId: String) : SpriteMapperAction
+
+    /** Opens one frame in the large view, where it can actually be worked on. */
+    data class OpenFrame(val frameId: String) : SpriteMapperAction
+    data object CloseFrame : SpriteMapperAction
+    data class StepFrame(val forward: Boolean) : SpriteMapperAction
+    data class SetStep(val pixels: Int) : SpriteMapperAction
+    data class NudgeFrame(val dx: Int, val dy: Int) : SpriteMapperAction
+
+    /** Positive amounts push an edge outward, negative pull it in. */
+    data class ResizeFrame(
+        val left: Int = 0,
+        val top: Int = 0,
+        val right: Int = 0,
+        val bottom: Int = 0,
+    ) : SpriteMapperAction
+
+    data class SetFrameRect(val rect: SourceRect) : SpriteMapperAction
+    data object SnapFrameToContent : SpriteMapperAction
+    data object AddFrame : SpriteMapperAction
+    data class RemoveFrame(val frameId: String) : SpriteMapperAction
 
     data class SelectState(val state: AnimationState) : SpriteMapperAction
     data class AddToClip(val frameId: String) : SpriteMapperAction

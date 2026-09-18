@@ -70,11 +70,21 @@ class GenerateSpriteSheetUseCase(
      */
     private fun buildPrompt(request: SpriteSheetRequest): String {
         val layout = request.layout
-        val rows = layout.clips.joinToString("\n") { clip ->
-            "Row ${clip.firstFrame / layout.columns + 1}: ${clip.frameCount} frames of " +
-                describe(clip.state) + "."
-        }
         val cells = layout.columns * layout.rows
+        if (cells == 1) return singlePosePrompt(request)
+        // A clip that spans the whole grid is not "row one"; saying so would
+        // tell the model the other row is something else, which is exactly the
+        // confusion that produces a half-drawn sheet.
+        val rows = if (layout.clips.size == 1 && layout.clips.first().frameCount >= cells) {
+            val only = layout.clips.first()
+            "All $cells cells show one action: ${describe(only.state)}, in order, read left to " +
+                "right and then down. Nothing else appears anywhere on the image."
+        } else {
+            layout.clips.joinToString("\n") { clip ->
+                "Row ${clip.firstFrame / layout.columns + 1}: ${clip.frameCount} frames of " +
+                    describe(clip.state) + "."
+            }
+        }
 
         return buildString {
             appendLine("A 2D game sprite sheet: one image made of $cells small separate pictures")
@@ -111,6 +121,36 @@ class GenerateSpriteSheetUseCase(
         }
     }
 
+    /**
+     * A prompt for one drawing.
+     *
+     * Everything the sheet prompt says about grids and cells is not merely
+     * unnecessary here, it is actively harmful: a model told about cells will
+     * draw cell borders, and a model told "one small picture" will draw a small
+     * picture in the corner of a large empty canvas. So this shares only the
+     * parts that are about the character and the background, and says the
+     * opposite about framing -- fill the canvas, one figure, nothing else.
+     */
+    private fun singlePosePrompt(request: SpriteSheetRequest): String = buildString {
+        appendLine("A single 2D game sprite: one character, drawn once, on its own.")
+        appendLine()
+        appendLine("The character: ${request.subject}.")
+        appendLine(request.styleDirection.ifBlank { DEFAULT_STYLE })
+        appendLine()
+        appendLine("Framing, exactly:")
+        appendLine("- One figure only. No second view, no turnaround, no variations.")
+        appendLine("- Full body, head to feet, nothing cropped at any edge.")
+        appendLine("- Centred, filling most of the canvas, feet near the bottom.")
+        appendLine("- A strong readable silhouette: this is seen small and from above.")
+        appendLine("- No grid, no panel, no frame, no border, no caption, no text.")
+        appendLine()
+        appendLine("Background: real alpha transparency, not a picture of it.")
+        appendLine("Do NOT draw the grey and white checkerboard pattern that image editors")
+        appendLine("use to show transparency. Do not fill the background with any colour,")
+        appendLine("white or black included. No scenery, no ground shadow, no drop shadow.")
+        appendLine("Viewed from a three-quarter overhead angle, as in an isometric game.")
+    }
+
     private fun describe(state: AnimationState): String = when (state) {
         AnimationState.IDLE -> "standing still, breathing"
         AnimationState.WALK -> "a walk cycle"
@@ -134,9 +174,22 @@ data class SpriteSheetRequest(
     val styleDirection: String = "",
     val layout: SheetLayout = SheetLayout.standard(),
     val modelId: String? = null,
+    /**
+     * Distinguishes two asks about the same subject.
+     *
+     * Ids are built from the subject, which is right until someone generates a
+     * walk block and then an attack block of the same warrior -- at which point
+     * the second silently replaces the first, and the work of mapping the first
+     * goes with it.
+     */
+    val variant: String = "",
 ) {
-    fun slug(): String =
-        subject.lowercase().replace(NON_ID, "_").trim('_').take(MAX_SLUG).ifBlank { "sprite" }
+    fun slug(): String {
+        val base = subject.lowercase().replace(NON_ID, "_").trim('_')
+            .take(MAX_SLUG).ifBlank { "sprite" }
+        val tag = variant.lowercase().replace(NON_ID, "_").trim('_')
+        return if (tag.isEmpty()) base else "${base}_$tag"
+    }
 
     private companion object {
         val NON_ID = Regex("[^a-z0-9]+")
@@ -212,6 +265,59 @@ data class SheetLayout(
                 AnimationClip(AnimationState.WALK, firstFrame = 4, frameCount = 4, frameDurationMs = 120),
                 AnimationClip(AnimationState.ATTACK, firstFrame = 8, frameCount = 4, frameDurationMs = 90, loops = false),
                 AnimationClip(AnimationState.HURT, firstFrame = 12, frameCount = 2, frameDurationMs = 110, loops = false),
+            ),
+        )
+
+        /**
+         * Six frames of one action and nothing else.
+         *
+         * The most reliable thing an image model can be asked for, and by a
+         * wide margin. A seven-row sheet demands that a figure stay the same
+         * size, the same colour and the same character across forty-two cells
+         * spanning seven different activities; six cells of one action is a
+         * far shorter consistency to hold, and the frames that come back are
+         * usable rather than merely present.
+         *
+         * Three by two rather than a literal strip, because a square canvas is
+         * what providers accept, and one row across a square gives each frame a
+         * tall thin box a standing figure sits lost inside. Read left to right
+         * then down, which is the order a clip already plays in -- so the whole
+         * block is one contiguous clip.
+         */
+        fun action(state: AnimationState, canvas: Int = DEFAULT_CANVAS): SheetLayout = SheetLayout(
+            columns = 3,
+            rows = 2,
+            canvas = canvas,
+            clips = listOf(
+                AnimationClip(
+                    state = state,
+                    firstFrame = 0,
+                    frameCount = 6,
+                    frameDurationMs = state.defaultFrameDurationMs,
+                    loops = state !in AnimationState.oneShot,
+                ),
+            ),
+        )
+
+        /**
+         * One drawing, asked for as one drawing.
+         *
+         * What a weak model produces anyway when asked for a sheet. Asking for
+         * it deliberately at least gets a composed, centred figure instead of a
+         * grid-shaped accident -- and a good still, bobbed and flashed and
+         * faded by the renderer, is a usable actor.
+         */
+        fun pose(canvas: Int = SMALL_CANVAS): SheetLayout = SheetLayout(
+            columns = 1,
+            rows = 1,
+            canvas = canvas,
+            clips = listOf(
+                AnimationClip(
+                    state = AnimationState.IDLE,
+                    firstFrame = 0,
+                    frameCount = 1,
+                    frameDurationMs = AnimationState.IDLE.defaultFrameDurationMs,
+                ),
             ),
         )
 

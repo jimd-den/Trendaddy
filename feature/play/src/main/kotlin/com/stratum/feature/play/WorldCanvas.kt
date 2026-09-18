@@ -15,11 +15,13 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import com.stratum.core.domain.actor.EnemyInstance
 import com.stratum.core.domain.sprite.AnimationPlayback
+import com.stratum.core.domain.sprite.ProceduralMotion
 import com.stratum.core.domain.sprite.SpriteFacing
 import com.stratum.core.domain.sprite.SpriteSheet
 import com.stratum.core.domain.world.BlockPos
@@ -416,59 +418,68 @@ private fun DrawScope.drawSprite(
     flash: Float,
 ) {
     val sheet = sprite.sheet
+    val clip = sheet.clipOrFallback(playback.state)
     val frame = sheet.frameFor(playback.frameIn(sheet), facing)
     val rect = sheet.frameRect(frame)
 
-    // Drawn a little larger than a block so a character reads against terrain,
-    // and anchored at the feet rather than the centre so a tall sprite grows
-    // upward instead of sinking into the ground.
-    val drawWidth = projection.tileWidth * projection.zoom * SPRITE_SCALE
-    val drawHeight = drawWidth * (rect.height.toFloat() / rect.width.coerceAtLeast(1))
-    val left = (x - drawWidth / 2f).toInt()
-    val top = (y - drawHeight + projection.tileHeight * projection.zoom * 0.25f).toInt()
+    // Drawn a little larger than a block so a character reads against terrain.
+    val baseWidth = projection.tileWidth * projection.zoom * SPRITE_SCALE
+    val baseHeight = baseWidth * (rect.height.toFloat() / rect.width.coerceAtLeast(1))
+
+    // Motion the art does not supply. A clip playing frames drawn for another
+    // state, or a still held as an animation, gets the difference made up here;
+    // a real animation is left alone, because a drawn attack does not need a
+    // procedural lunge fighting it.
+    val motion = ProceduralMotion.forFrame(
+        state = playback.state,
+        elapsedMs = playback.elapsedMs,
+        clipDurationMs = clip?.durationMs ?: 0,
+        frameCount = clip?.frameCount ?: 1,
+        standsIn = clip == null || clip.state != playback.state || clip.standsInFor != null,
+    )
+
+    val drawWidth = baseWidth * motion.scaleX
+    val drawHeight = baseHeight * motion.scaleY
+    // Anchored at the feet rather than the centre, so a tall sprite grows
+    // upward instead of sinking into the ground -- and so a body that sags as
+    // it dies keeps its contact with the floor while it does.
+    val groundY = y + projection.tileHeight * projection.zoom * 0.25f
+    val left = (x - drawWidth / 2f + motion.offsetX * baseWidth).toInt()
+    val top = (groundY - drawHeight + motion.offsetY * baseHeight).toInt()
+
+    val blit: (Float, ColorFilter?) -> Unit = { alpha, tint ->
+        drawImage(
+            image = sprite.image,
+            srcOffset = IntOffset(rect.left, rect.top),
+            srcSize = IntSize(rect.width, rect.height),
+            dstOffset = IntOffset(left, top),
+            dstSize = IntSize(drawWidth.toInt(), drawHeight.toInt()),
+            filterQuality = FilterQuality.None,
+            alpha = alpha,
+            colorFilter = tint,
+        )
+    }
 
     // A generated sheet reliably holds one facing, not four. Mirroring buys the
     // other side for nothing and reads correctly at this camera angle, which is
     // more dependable than asking a model for four consistent angles. Art that
     // says not to -- anything with a readable asymmetry on it -- keeps its one
     // drawn angle in every direction instead.
-    if (facing.mirrored && sheet.mirrorsFacings) {
+    //
+    // The mirror is taken about the actor's own position, which is also what
+    // turns the embellishment's forward offset into a real forward: a lunge
+    // reflects along with the body it belongs to.
+    val mirrored = facing.mirrored && sheet.mirrorsFacings
+    if (mirrored) {
         withTransform({
             scale(scaleX = -1f, scaleY = 1f, pivot = Offset(x, top + drawHeight / 2f))
         }) {
-            drawImage(
-                image = sprite.image,
-                srcOffset = IntOffset(rect.left, rect.top),
-                srcSize = IntSize(rect.width, rect.height),
-                dstOffset = IntOffset(left, top),
-                dstSize = IntSize(drawWidth.toInt(), drawHeight.toInt()),
-                filterQuality = FilterQuality.None,
-                alpha = 1f,
-            )
+            blit(motion.alpha, null)
+            if (flash > 0f) blit(flash * 0.75f * motion.alpha, ColorFilter.tint(Color.White))
         }
     } else {
-        drawImage(
-            image = sprite.image,
-            srcOffset = IntOffset(rect.left, rect.top),
-            srcSize = IntSize(rect.width, rect.height),
-            dstOffset = IntOffset(left, top),
-            dstSize = IntSize(drawWidth.toInt(), drawHeight.toInt()),
-            filterQuality = FilterQuality.None,
-            alpha = 1f,
-        )
-    }
-
-    if (flash > 0f) {
-        drawImage(
-            image = sprite.image,
-            srcOffset = IntOffset(rect.left, rect.top),
-            srcSize = IntSize(rect.width, rect.height),
-            dstOffset = IntOffset(left, top),
-            dstSize = IntSize(drawWidth.toInt(), drawHeight.toInt()),
-            filterQuality = FilterQuality.None,
-            alpha = flash * 0.75f,
-            colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White),
-        )
+        blit(motion.alpha, null)
+        if (flash > 0f) blit(flash * 0.75f * motion.alpha, ColorFilter.tint(Color.White))
     }
 }
 

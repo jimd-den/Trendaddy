@@ -44,6 +44,42 @@ data class SliceSpec(
 
     companion object {
         /**
+         * The slice for a sheet described by its cell size rather than its
+         * column count.
+         *
+         * This is how downloaded art is actually documented -- an LPC sheet is
+         * "64 by 64 frames", never "thirteen columns" -- and how a person
+         * thinks about a sheet they can measure but not count. Working the grid
+         * out from the cell size is exact where counting cells by eye on a
+         * twenty-one row sheet is not.
+         */
+        fun ofCellSize(
+            cellWidth: Int,
+            cellHeight: Int,
+            imageWidth: Int,
+            imageHeight: Int,
+            offsetX: Int = 0,
+            offsetY: Int = 0,
+            gutterX: Int = 0,
+            gutterY: Int = 0,
+        ): SliceSpec? {
+            if (cellWidth <= 0 || cellHeight <= 0) return null
+            val columns = (imageWidth - offsetX + gutterX) / (cellWidth + gutterX)
+            val rows = (imageHeight - offsetY + gutterY) / (cellHeight + gutterY)
+            if (columns <= 0 || rows <= 0) return null
+            return SliceSpec(
+                columns = columns,
+                rows = rows,
+                offsetX = offsetX,
+                offsetY = offsetY,
+                cellWidth = cellWidth,
+                cellHeight = cellHeight,
+                gutterX = gutterX,
+                gutterY = gutterY,
+            )
+        }
+
+        /**
          * The slice that divides an image evenly, which is the honest starting
          * guess for a grid nobody has measured yet.
          *
@@ -142,7 +178,7 @@ object SpriteSlicing {
         // them -- and with them the held poses someone set up deliberately,
         // which is a worse thing to lose than a grid nudge is to make.
         val copies = atlas.frames
-            .filter { COPY_MARK in it.id }
+            .filter { COPY_MARK in it.id && !it.id.startsWith(FrameGeometry.FREE_PREFIX) }
             .groupBy { it.id.substringBefore(COPY_MARK) }
 
         val next = buildList {
@@ -162,6 +198,11 @@ object SpriteSlicing {
                 // rectangle, keeping its own flip and anchor.
                 copies[fresh.id]?.forEach { copy -> add(copy.copy(source = fresh.source)) }
             }
+            // Frames placed by hand have no grid position, so nothing about a
+            // new grid says anything about them. They are carried across
+            // untouched, and stay after the cells, which is where they were
+            // added and where stepping through the sheet expects to find them.
+            addAll(atlas.frames.filter { it.id.startsWith(FrameGeometry.FREE_PREFIX) })
         }
 
         val keptIds = next.map { it.id }.toSet()

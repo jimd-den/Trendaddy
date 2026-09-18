@@ -142,6 +142,7 @@ object AnimationFallback {
                     frameIds = atlas.clip(source)?.frameIds.orEmpty(),
                     frameDurationMs = state.defaultFrameDurationMs,
                     loops = state !in AnimationState.oneShot,
+                    borrowedFrom = source,
                 ),
             )
         }

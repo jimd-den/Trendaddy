@@ -97,6 +97,16 @@ data class AnimationClip(
     val frameCount: Int,
     val frameDurationMs: Int = 120,
     val loops: Boolean = true,
+    /**
+     * The state this clip's frames were really drawn for, when they were
+     * borrowed rather than drawn for this one.
+     *
+     * Carried all the way to the renderer so it can compensate. A death made of
+     * idle frames needs the body to sag and fade or it reads as a bug, and the
+     * only place that is knowable is here -- by the time the pixels are on
+     * screen, borrowed frames and drawn ones look identical.
+     */
+    val standsInFor: AnimationState? = null,
 ) {
     init {
         require(frameCount > 0) { "Clip for $state has no frames" }

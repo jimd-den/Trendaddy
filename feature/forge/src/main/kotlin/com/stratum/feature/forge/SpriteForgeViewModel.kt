@@ -10,6 +10,7 @@ import com.stratum.core.domain.ai.GenerationAttempt
 import com.stratum.core.domain.ai.GenerationJournal
 import com.stratum.core.domain.ai.GenerationObserver
 import com.stratum.core.domain.ai.GenerationStage
+import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.sprite.GridOutcome
 import com.stratum.core.domain.sprite.KeyStrategy
 import com.stratum.core.domain.sprite.SheetPreparation
@@ -70,6 +71,11 @@ class SpriteForgeViewModel(
         _state.value = _state.value.copy(target = target)
     }
 
+    /** Which action a single-action generation should draw. */
+    fun selectAction(action: AnimationState) {
+        _state.value = _state.value.copy(action = action)
+    }
+
     fun refresh() {
         _state.value = _state.value.copy(
             sheets = loadSheets(),
@@ -118,7 +124,11 @@ class SpriteForgeViewModel(
                     subject = subject,
                     namespace = current.target.namespace,
                     styleDirection = current.style,
-                    layout = current.target.layout,
+                    layout = current.target.layoutFor(current.action),
+                    // Without this, generating a walk block and then an attack
+                    // block of the same warrior would put the second on top of
+                    // the first, taking the mapping of the first with it.
+                    variant = if (current.target.usesAction) current.action.name else "",
                 ),
                 observer,
             )
@@ -224,18 +234,50 @@ enum class SpriteStyle(val label: String, val direction: String) {
     ),
 }
 
-enum class SpriteTarget(val label: String, val namespace: String, val layout: SheetLayout) {
+enum class SpriteTarget(
+    val label: String,
+    val namespace: String,
+    /** Whether this target draws one named action, so the screen offers a choice of it. */
+    val usesAction: Boolean = false,
+) {
     /** The character you play. Worth the denser sheet and the extra frames. */
-    HERO("Hero", "hero", SheetLayout.detailed()),
+    HERO("Hero", "hero"),
 
     /** A monster fights and dies; it does not need a signature power. */
-    MONSTER("Monster", "monster", SheetLayout.standard()),
+    MONSTER("Monster", "monster"),
+
+    /**
+     * Six frames of one action, and the most likely of these to come back
+     * usable. A full sheet asks a model to hold a character consistent across
+     * forty-two cells and seven activities; this asks for six cells of one.
+     */
+    ACTION("One action", "action", usesAction = true),
+
+    /**
+     * One drawing. What a weak model produces anyway -- asked for deliberately,
+     * so it arrives composed and centred rather than as a grid-shaped accident.
+     */
+    POSE("One pose", "pose"),
+    ;
+
+    fun layoutFor(action: AnimationState): SheetLayout = when (this) {
+        HERO -> SheetLayout.detailed()
+        MONSTER -> SheetLayout.standard()
+        ACTION -> SheetLayout.action(action)
+        POSE -> SheetLayout.pose()
+    }
 }
 
 data class SpriteForgeUiState(
     val subject: String = "",
     val style: String = "",
     val target: SpriteTarget = SpriteTarget.HERO,
+    /**
+     * Walk by default: it is the animation a player sees most and the one a
+     * still reads worst as, so it is the first one worth spending a generation
+     * on.
+     */
+    val action: AnimationState = AnimationState.WALK,
     val busy: Boolean = false,
     val sheets: List<SpriteSheet> = emptyList(),
     val lastGenerated: SpriteSheet? = null,

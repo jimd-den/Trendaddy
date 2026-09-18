@@ -128,7 +128,9 @@ data class SpriteAtlas(
      */
     fun appendToClip(state: AnimationState, frameId: String): SpriteAtlas =
         if (frame(frameId) == null) this
-        else updateClip(state) { it.copy(frameIds = it.frameIds + frameId) }
+        else updateClip(state) {
+            it.copy(frameIds = it.frameIds + frameId, borrowedFrom = null)
+        }
 
     fun removeFromClip(state: AnimationState, index: Int): SpriteAtlas =
         updateClip(state) { clip ->
@@ -226,6 +228,52 @@ data class SourceRect(val left: Int, val top: Int, val width: Int, val height: I
 
     fun isWithin(imageWidth: Int, imageHeight: Int): Boolean =
         left >= 0 && top >= 0 && right <= imageWidth && bottom <= imageHeight
+
+    fun movedBy(dx: Int, dy: Int): SourceRect = copy(left = left + dx, top = top + dy)
+
+    /**
+     * The same rectangle with each edge pushed outward by the given amount, or
+     * pulled in by a negative one.
+     *
+     * Refuses to collapse rather than clamping silently to a sliver: a person
+     * holding the shrink button expects it to stop at something they can still
+     * see and grab, not to leave a two-pixel line they have to hunt for.
+     */
+    fun expanded(
+        left: Int = 0,
+        top: Int = 0,
+        right: Int = 0,
+        bottom: Int = 0,
+        minEdge: Int = MIN_EDGE,
+    ): SourceRect {
+        val width = this.width + left + right
+        val height = this.height + top + bottom
+        if (width < minEdge || height < minEdge) return this
+        return SourceRect(this.left - left, this.top - top, width, height)
+    }
+
+    /**
+     * Shifted back onto the image, rather than cut down to the part that fits.
+     *
+     * The difference matters while dragging. Clipping at the edge means a
+     * rectangle pushed off the side comes back narrower than it went out, so a
+     * frame loses width every time it touches a border -- which is exactly when
+     * someone is dragging quickly and not watching the numbers.
+     */
+    fun nudgedInside(imageWidth: Int, imageHeight: Int): SourceRect {
+        if (width > imageWidth || height > imageHeight) {
+            return clampedTo(imageWidth, imageHeight) ?: this
+        }
+        return copy(
+            left = left.coerceIn(0, imageWidth - width),
+            top = top.coerceIn(0, imageHeight - height),
+        )
+    }
+
+    companion object {
+        /** Smaller than this is not a frame anyone can see, let alone tap. */
+        const val MIN_EDGE = 2
+    }
 }
 
 /**
@@ -252,6 +300,16 @@ data class ClipMapping(
     val frameIds: List<String> = emptyList(),
     val frameDurationMs: Int = state.defaultFrameDurationMs,
     val loops: Boolean = state !in AnimationState.oneShot,
+    /**
+     * Set when these frames were borrowed from another state rather than mapped
+     * for this one.
+     *
+     * Kept so the editor can show which animations are real, and so the
+     * renderer can be told to make up the difference. Dropping a frame in by
+     * hand clears it: once someone has chosen the frames themselves, the clip
+     * is theirs however it started.
+     */
+    val borrowedFrom: AnimationState? = null,
 ) {
     val isEmpty: Boolean get() = frameIds.isEmpty()
 
