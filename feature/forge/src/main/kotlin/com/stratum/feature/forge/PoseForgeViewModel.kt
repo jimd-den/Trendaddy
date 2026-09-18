@@ -5,10 +5,13 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.stratum.core.domain.ai.BasePoseRequest
 import com.stratum.core.domain.ai.GeneratedImage
+import com.stratum.core.domain.ai.GenerationException
 import com.stratum.core.domain.ai.GenerationObserver
 import com.stratum.core.domain.ai.ImageReference
 import com.stratum.core.domain.ai.PoseFrameRequest
+import com.stratum.core.domain.ai.PoseRunPolicy
 import com.stratum.core.domain.ai.PoseScript
+import com.stratum.core.domain.ai.RunDecision
 import com.stratum.core.domain.ai.PoseStep
 import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.sprite.PackedSheet
@@ -23,6 +26,8 @@ import com.stratum.core.domain.sprite.SpriteSheet
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -245,6 +250,8 @@ class PoseForgeViewModel(
         }
 
         val reference = ImageReference(referenceBytes)
+        val guides = current.guides
+        val style = current.style
         val script = current.script
         val todo = script.remaining(posesDrawn(setId))
         if (todo.isEmpty()) {
@@ -261,45 +268,95 @@ class PoseForgeViewModel(
         )
         job = viewModelScope.launch {
             var failures = emptyMap<String, String>()
-            for (step in todo) {
-                _state.value = _state.value.copy(currentStep = step)
-                val result = runCatching {
-                    drawPose(
-                        PoseFrameRequest(
-                            reference = reference,
-                            step = step,
-                            guide = guideFor(step, _state.value.guides),
-                            styleDirection = _state.value.style,
-                        ),
-                        GenerationObserver.None,
-                    )
-                }.getOrElse { cause ->
-                    if (cause is CancellationException) throw cause
-                    Result.failure(cause)
-                }
+            var abandoned: String? = null
 
-                result.fold(
-                    onSuccess = { image ->
-                        savePose(setId, step.key, image.bytes)
-                        _state.value = _state.value.copy(drawn = posesDrawn(setId))
-                    },
-                    onFailure = { cause ->
-                        // One bad frame does not end the run. Thirty-nine good
-                        // poses and a list of which to retry is a far better
-                        // place to be than nothing.
-                        failures = failures + (step.key to (cause.message ?: "failed"))
-                        _state.value = _state.value.copy(failures = failures)
-                    },
-                )
+            steps@ for (step in todo) {
+                var attempt = 1
+                while (true) {
+                    ensureActive()
+                    _state.value = _state.value.copy(
+                        currentStep = step,
+                        attempt = attempt,
+                        waitingMs = 0L,
+                    )
+
+                    // Everything here touches the network or the disk: a
+                    // megabyte written per frame, a guide rendered per frame,
+                    // and a directory listed per frame. On the main thread that
+                    // is forty stutters at best.
+                    val result = withContext(Dispatchers.IO) {
+                        runCatching {
+                            drawPose(
+                                PoseFrameRequest(
+                                    reference = reference,
+                                    step = step,
+                                    guide = guideFor(step, guides),
+                                    styleDirection = style,
+                                ),
+                                GenerationObserver.None,
+                            )
+                        }.getOrElse { cause ->
+                            if (cause is CancellationException) throw cause
+                            Result.failure(cause)
+                        }
+                    }
+
+                    val image = result.getOrNull()
+                    if (image != null) {
+                        withContext(Dispatchers.IO) { savePose(setId, step.key, image.bytes) }
+                        val done = withContext(Dispatchers.IO) { posesDrawn(setId) }
+                        _state.value = _state.value.copy(drawn = done, attempt = 1)
+                        continue@steps
+                    }
+
+                    val cause = result.exceptionOrNull() ?: GenerationException("failed")
+                    when (PoseRunPolicy.decide(attempt, cause)) {
+                        RunDecision.RETRY -> {
+                            // The expected failure at this volume, not an edge
+                            // case: forty requests in a row will meet a rate
+                            // limit, and it clears by waiting.
+                            val wait = PoseRunPolicy.backoffMillis(attempt)
+                            _state.value = _state.value.copy(
+                                waitingMs = wait,
+                                message = "${cause.message} Retrying ${step.key} in " +
+                                    "${wait / 1000}s.",
+                            )
+                            delay(wait)
+                            attempt++
+                        }
+
+                        RunDecision.SKIP -> {
+                            // One bad frame does not end the run. Thirty-nine
+                            // good poses and a list of which to retry is a far
+                            // better place to be than nothing.
+                            failures = failures + (step.key to (cause.message ?: "failed"))
+                            _state.value = _state.value.copy(failures = failures)
+                            continue@steps
+                        }
+
+                        RunDecision.ABANDON -> {
+                            abandoned = cause.message ?: "The provider refused the run."
+                            break@steps
+                        }
+                    }
+                }
             }
+
             _state.value = _state.value.copy(
                 busy = false,
                 currentStep = null,
-                message = if (failures.isEmpty()) {
-                    "Every pose drawn. Build the sheet."
-                } else {
-                    "${failures.size} pose${if (failures.size == 1) "" else "s"} failed. " +
-                        "Run it again to retry just those."
+                attempt = 1,
+                waitingMs = 0L,
+                error = abandoned,
+                message = when {
+                    // Said plainly, because the failure is the same for every
+                    // remaining frame and the person needs to fix one thing
+                    // rather than read forty identical errors.
+                    abandoned != null -> "Stopped after ${_state.value.completed} of " +
+                        "${_state.value.total}. Nothing else would have worked either."
+                    failures.isEmpty() -> "Every pose drawn. Build the sheet."
+                    else -> "${failures.size} pose${if (failures.size == 1) "" else "s"} " +
+                        "failed. Run it again to retry just those."
                 },
             )
         }
@@ -464,6 +521,10 @@ data class PoseForgeUiState(
     val drawn: Set<String> = emptySet(),
     val busy: Boolean = false,
     val currentStep: PoseStep? = null,
+    /** Which attempt at the current frame, counting from 1. */
+    val attempt: Int = 1,
+    /** How long this wait is, while riding out a rate limit. Zero when running. */
+    val waitingMs: Long = 0L,
     val failures: Map<String, String> = emptyMap(),
     val savedSheet: SpriteSheet? = null,
     val providerConfigured: Boolean = false,
@@ -491,7 +552,14 @@ data class PoseForgeUiState(
 
     /** What is being drawn right now, in the words the model was given. */
     val currentLabel: String?
-        get() = currentStep?.let { "${it.state.name.lowercase()} ${it.index + 1}" }
+        get() = currentStep?.let {
+            val name = "${it.state.name.lowercase()} ${it.index + 1}"
+            when {
+                waitingMs > 0L -> "$name — waiting ${waitingMs / 1000}s"
+                attempt > 1 -> "$name — attempt $attempt"
+                else -> name
+            }
+        }
 
     fun statesWithFrames(): List<AnimationState> =
         script.states.filter { state -> script.stepsFor(state).any { it.key in drawn } }

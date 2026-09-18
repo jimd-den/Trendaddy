@@ -102,7 +102,7 @@ class OpenRouterImageModel(
                     // nobody needs to read that, but a failure is short.
                     responseBody = body.take(MAX_RECORDED_BODY)
                     if (!response.isSuccessful) {
-                        throw GenerationException(describeFailure(response.code, body, model))
+                        throw failureFor(response.code, body, model)
                     }
                     observer.onStage(GenerationStage.DECODING)
                     val bytes = if (editing) editedImage(body, model) else drawnImage(body, model)
@@ -133,7 +133,19 @@ class OpenRouterImageModel(
                 ),
             )
             observer.onStage(if (result.isSuccess) GenerationStage.DONE else GenerationStage.FAILED)
-            result
+            // A socket that died halfway through is worth another go for the
+            // same reason a 429 is: the request was fine, the moment was not.
+            result.recoverCatching { cause ->
+                throw if (cause is java.io.IOException) {
+                    GenerationException(
+                        cause.message ?: "The connection dropped.",
+                        cause = cause,
+                        retryable = true,
+                    )
+                } else {
+                    cause
+                }
+            }
         }
 
     /**
@@ -266,14 +278,38 @@ class OpenRouterImageModel(
         )
     }
 
-    private fun describeFailure(code: Int, body: String, model: String): String = when (code) {
-        400 -> "'$model' rejected the request. It may not be an image model."
-        401, 403 -> "The API key was rejected. Check it in settings."
-        402 -> "The provider reports no remaining credit for this key."
-        404 -> "'$model' is not available on this provider."
-        429 -> "The provider is rate limiting. Wait a moment and try again."
-        in 500..599 -> "The provider is having trouble (HTTP $code). Try again shortly."
-        else -> "The provider refused the request (HTTP $code): ${body.take(200)}"
+    /**
+     * The status code turned into something a run can act on.
+     *
+     * Three outcomes, not one. A rate limit or a provider wobble is worth
+     * waiting out, because the next attempt usually works. A rejected key or a
+     * model that does not exist will do exactly the same thing to every
+     * remaining frame, so a long run should stop rather than spend four minutes
+     * proving it. Everything else is this frame's problem alone: skip it, keep
+     * going, report it at the end.
+     */
+    private fun failureFor(code: Int, body: String, model: String): GenerationException = when (code) {
+        400 -> GenerationException("'$model' rejected the request. It may not be an image model.")
+        401, 403 -> GenerationException(
+            "The API key was rejected. Check it in settings.",
+            fatal = true,
+        )
+        402 -> GenerationException(
+            "The provider reports no remaining credit for this key.",
+            fatal = true,
+        )
+        404 -> GenerationException("'$model' is not available on this provider.", fatal = true)
+        408, 429 -> GenerationException(
+            "The provider is rate limiting. Waiting before the next attempt.",
+            retryable = true,
+        )
+        in 500..599 -> GenerationException(
+            "The provider is having trouble (HTTP $code).",
+            retryable = true,
+        )
+        else -> GenerationException(
+            "The provider refused the request (HTTP $code): ${body.take(200)}",
+        )
     }
 
     private companion object {

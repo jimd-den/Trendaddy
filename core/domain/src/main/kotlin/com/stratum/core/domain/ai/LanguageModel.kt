@@ -111,5 +111,29 @@ interface ModelCatalogPort {
 }
 
 /** Raised when a model answers with something that is not usable content. */
-class GenerationException(message: String, cause: Throwable? = null) :
-    IllegalStateException(message, cause)
+/**
+ * A generation that did not produce an image.
+ *
+ * [retryable] is the whole reason this is not a plain exception. A run that
+ * draws forty frames one after another will meet a rate limit — it is not an
+ * edge case, it is what happens when you send forty image requests in a row —
+ * and the difference between waiting two seconds and losing the frame is the
+ * difference between a finished character and a half-finished one. Equally, a
+ * rejected API key will reject all forty, and grinding through the rest to
+ * prove it wastes minutes to learn nothing.
+ *
+ * The adapter knows which it is, because it has the status code. Nothing
+ * downstream can work it out from a sentence, so it is carried rather than
+ * inferred.
+ */
+class GenerationException(
+    message: String,
+    cause: Throwable? = null,
+    val retryable: Boolean = false,
+    /**
+     * True when this will fail identically for every other frame too: a bad
+     * key, no credit, a model that does not exist. The run should stop rather
+     * than reproduce the same failure another thirty-nine times.
+     */
+    val fatal: Boolean = false,
+) : IllegalStateException(message, cause)
