@@ -10,7 +10,9 @@ import com.stratum.core.domain.ai.GenerationAttempt
 import com.stratum.core.domain.ai.GenerationJournal
 import com.stratum.core.domain.ai.GenerationObserver
 import com.stratum.core.domain.ai.GenerationStage
+import com.stratum.core.domain.sprite.GridOutcome
 import com.stratum.core.domain.sprite.KeyStrategy
+import com.stratum.core.domain.sprite.SheetPreparation
 import com.stratum.core.domain.sprite.SpriteSheet
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,8 +28,11 @@ import kotlinx.coroutines.launch
  */
 class SpriteForgeViewModel(
     private val generateSheet: GenerateSpriteSheetUseCase,
-    /** Saves the sheet and reports how its background was dealt with. */
-    private val saveSheet: (SpriteSheet, ByteArray) -> KeyStrategy,
+    /**
+     * Saves the sheet and reports what had to be done to it: the background
+     * keyed out, and the grid checked against what the model actually drew.
+     */
+    private val saveSheet: (SpriteSheet, ByteArray) -> SheetPreparation,
     private val loadSheets: () -> List<SpriteSheet>,
     private val deleteSheet: (String) -> Unit,
     private val isProviderConfigured: () -> Boolean,
@@ -120,13 +125,17 @@ class SpriteForgeViewModel(
             _state.value = result.fold(
                 onSuccess = { generated ->
                     _state.value = _state.value.copy(stage = GenerationStage.SAVING)
-                    val keyed = saveSheet(generated.sheet, generated.image.bytes)
+                    val prepared = saveSheet(generated.sheet, generated.image.bytes)
                     _state.value.copy(
                         busy = false,
                         stage = GenerationStage.DONE,
                         sheets = loadSheets(),
-                        lastGenerated = generated.sheet,
-                        keyStrategy = keyed,
+                        // The sheet as stored, which is not always the sheet as
+                        // asked for: a model that drew a different grid is cut
+                        // on the one it drew.
+                        lastGenerated = prepared.sheet,
+                        keyStrategy = prepared.keyStrategy,
+                        gridNote = prepared.grid.takeIf { it.outcome != GridOutcome.AS_ASKED }?.summary,
                         error = null,
                     )
                 },
@@ -161,7 +170,7 @@ class SpriteForgeViewModel(
     companion object {
         fun factory(
             generateSheet: GenerateSpriteSheetUseCase,
-            saveSheet: (SpriteSheet, ByteArray) -> KeyStrategy,
+            saveSheet: (SpriteSheet, ByteArray) -> SheetPreparation,
             loadSheets: () -> List<SpriteSheet>,
             deleteSheet: (String) -> Unit,
             isProviderConfigured: () -> Boolean,
@@ -229,6 +238,8 @@ data class SpriteForgeUiState(
     val detailsOpen: Boolean = false,
     /** How the last sheet's background was dealt with, for the player to see. */
     val keyStrategy: KeyStrategy? = null,
+    /** Set when the model did not draw the grid it was asked for. */
+    val gridNote: String? = null,
 ) {
     val progress: Float get() = stage?.fraction ?: 0f
 

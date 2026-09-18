@@ -266,6 +266,18 @@ fun SpriteForgeContent(
             }
         }
 
+        // A model that drew one picture instead of a grid is the difference
+        // between a sprite that animates and one that appears to pan, and it is
+        // invisible in the thumbnail — so it is said outright.
+        state.gridNote?.let { note ->
+            Spacer(Modifier.height(Space.small))
+            Text(
+                text = note,
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.danger,
+            )
+        }
+
         // What was actually sent and what actually came back. A model that
         // rejects a sheet almost always says why, and summarising that into
         // "the request was rejected" throws away the only useful part.
