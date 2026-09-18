@@ -52,12 +52,19 @@ class WeaponFitStore(context: Context) {
 }
 
 @Serializable
-private data class FitDto(val offsetX: Float, val offsetY: Float, val scale: Float)
+private data class FitDto(
+    val offsetX: Float,
+    val offsetY: Float,
+    val scale: Float,
+    /** Defaulted, so fits written before the mirror existed keep their meaning. */
+    val mirrored: Boolean = false,
+)
 
-private fun WeaponFit.toDto() = FitDto(offsetX, offsetY, scale)
+private fun WeaponFit.toDto() = FitDto(offsetX, offsetY, scale, mirrored)
 
 private fun FitDto.toDomain() = WeaponFit(
     offsetX = offsetX.coerceIn(-WeaponFit.MAX_OFFSET, WeaponFit.MAX_OFFSET),
     offsetY = offsetY.coerceIn(-WeaponFit.MAX_OFFSET, WeaponFit.MAX_OFFSET),
     scale = scale.coerceIn(WeaponFit.MIN_SCALE, WeaponFit.MAX_SCALE),
+    mirrored = mirrored,
 )

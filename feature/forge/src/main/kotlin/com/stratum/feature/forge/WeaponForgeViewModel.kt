@@ -105,6 +105,20 @@ class WeaponForgeViewModel(
         _state.value = _state.value.copy(fit = next)
     }
 
+    /**
+     * Flips the rig, because the drawing came back mirrored from the guide.
+     *
+     * Its own control rather than a wider offset range: measured, the hand was
+     * at 0.86 of the frame where the rig expected 0.2, and halfway between
+     * those is the character's navel.
+     */
+    fun toggleMirror() {
+        val sheetId = _state.value.fittingSheetId ?: return
+        val next = _state.value.fit.copy(mirrored = !_state.value.fit.mirrored)
+        saveFit(sheetId, next)
+        _state.value = _state.value.copy(fit = next)
+    }
+
     fun resetFit() {
         val sheetId = _state.value.fittingSheetId ?: return
         saveFit(sheetId, WeaponFit.none)

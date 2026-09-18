@@ -120,8 +120,15 @@ class PoseForgeViewModel(
         val pose = readGuideImage(bytes)
         if (pose == null) {
             _state.value = _state.value.copy(
-                error = "No OpenPose skeleton could be found in that image. It has to be the " +
-                    "coloured skeleton itself, not a photograph or a rendered character.",
+                // Named precisely, because the common cause is not a wrong
+                // file. Reading a rendered skeleton back means matching the
+                // canonical OpenPose palette, and libraries draw their previews
+                // in whatever colours they like -- one checked ships Material
+                // blues and pinks. Its keypoints are right there in the page,
+                // and pasting those is exact where reading pixels is a guess.
+                error = "No OpenPose skeleton could be read from that image. Many libraries " +
+                    "draw their skeletons in their own colours, which cannot be read back. " +
+                    "Paste the pose's JSON keypoints instead — that is exact.",
             )
             return
         }

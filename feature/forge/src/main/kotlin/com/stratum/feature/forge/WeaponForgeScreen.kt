@@ -99,6 +99,7 @@ fun WeaponForgeScreen(
         onSelectFittingSheet = viewModel::selectFittingSheet,
         onStepPreview = viewModel::stepPreview,
         onNudgeFit = viewModel::nudgeFit,
+        onToggleMirror = viewModel::toggleMirror,
         onResetFit = viewModel::resetFit,
         onDismiss = viewModel::dismissMessage,
         onBack = onBack,
@@ -121,6 +122,7 @@ fun WeaponForgeContent(
     onSelectFittingSheet: (String) -> Unit = {},
     onStepPreview: (Boolean) -> Unit = {},
     onNudgeFit: (Float, Float, Float) -> Unit = { _, _, _ -> },
+    onToggleMirror: () -> Unit = {},
     onResetFit: () -> Unit = {},
     onDismiss: () -> Unit = {},
     onBack: () -> Unit = {},
@@ -338,6 +340,7 @@ fun WeaponForgeContent(
             onSelectFittingSheet = onSelectFittingSheet,
             onStepPreview = onStepPreview,
             onNudgeFit = onNudgeFit,
+            onToggleMirror = onToggleMirror,
             onResetFit = onResetFit,
         )
 
@@ -363,6 +366,7 @@ private fun FitPanel(
     onSelectFittingSheet: (String) -> Unit,
     onStepPreview: (Boolean) -> Unit,
     onNudgeFit: (Float, Float, Float) -> Unit,
+    onToggleMirror: () -> Unit,
     onResetFit: () -> Unit,
 ) {
     val colors = StratumTheme.colors
@@ -474,9 +478,32 @@ private fun FitPanel(
         }
 
         Spacer(Modifier.height(Space.small))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(Space.small),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Worth its own control: an image model reproduces the shape of a
+            // pose faithfully and then draws it on whichever side it prefers,
+            // which no amount of nudging reaches across.
+            Text(
+                text = "Holds it in the other hand",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkMuted,
+                modifier = Modifier.weight(1f),
+            )
+            StratumChip(
+                label = if (state.fit.mirrored) "Mirrored" else "As drawn",
+                selected = state.fit.mirrored,
+                onClick = onToggleMirror,
+            )
+        }
+
+        Spacer(Modifier.height(Space.small))
         Text(
-            text = "offset %+.2f, %+.2f · size %.2fx".format(
+            text = "offset %+.2f, %+.2f · size %.2fx%s".format(
                 state.fit.offsetX, state.fit.offsetY, state.fit.scale,
+                if (state.fit.mirrored) " · mirrored" else "",
             ),
             style = MaterialTheme.typography.labelSmall,
             color = colors.inkMuted,

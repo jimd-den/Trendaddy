@@ -383,3 +383,153 @@ class PoseGuidesTest {
         assertEquals(PoseGuideMode.IMPORTED, guides.mode)
     }
 }
+
+/**
+ * A real pose from a real library, copied out of the page that serves it.
+ *
+ * Seventeen COCO keypoints as `{x, y}` objects, already normalised. Worth
+ * having verbatim rather than paraphrased: every reader here was written
+ * against the three shapes that were *documented*, and this fourth one — the
+ * one an actual library actually ships — would have been rejected as not a pose
+ * at all.
+ */
+class RealLibraryPoseTest {
+
+    /** "Arms crossed": note the wrists cross, so left sits right of right. */
+    private val armsCrossed = """
+        {"keypoints":[
+          {"x":0.5,"y":0.1},{"x":0.488,"y":0.088},{"x":0.512,"y":0.088},
+          {"x":0.472,"y":0.103},{"x":0.528,"y":0.103},
+          {"x":0.43,"y":0.18},{"x":0.57,"y":0.18},
+          {"x":0.38,"y":0.32},{"x":0.62,"y":0.32},
+          {"x":0.58,"y":0.36},{"x":0.42,"y":0.36},
+          {"x":0.46,"y":0.52},{"x":0.54,"y":0.52},
+          {"x":0.45,"y":0.72},{"x":0.55,"y":0.72},
+          {"x":0.44,"y":0.93},{"x":0.56,"y":0.93}],"size":640}
+    """.trimIndent()
+
+    /** "Arms above head": keypoints leave the frame, which real poses do. */
+    private val armsAboveHead = """
+        {"keypoints":[
+          {"x":0.5,"y":0.12},{"x":0.488,"y":0.108},{"x":0.512,"y":0.108},
+          {"x":0.472,"y":0.123},{"x":0.528,"y":0.123},
+          {"x":0.43,"y":0.18},{"x":0.57,"y":0.18},
+          {"x":0.38,"y":0.08},{"x":0.62,"y":0.08},
+          {"x":0.4,"y":-0.02},{"x":0.6,"y":-0.02},
+          {"x":0.46,"y":0.52},{"x":0.54,"y":0.52},
+          {"x":0.45,"y":0.72},{"x":0.55,"y":0.72},
+          {"x":0.44,"y":0.93},{"x":0.56,"y":0.93}],"size":220}
+    """.trimIndent()
+
+    @Test
+    fun `keypoints given as objects are read`() {
+        val body = assertNotNull(OpenPoseJson.parse(armsCrossed))
+        assertEquals(17, body.presentCount)
+        // Seventeen keypoints is COCO, which carries no neck of its own.
+        assertNull(body[OpenPoseJoint.NECK])
+        assertNotNull(body.neck())
+    }
+
+    @Test
+    fun `the COCO order is the one the library actually uses`() {
+        val body = assertNotNull(OpenPoseJson.parse(armsCrossed))
+        assertEquals(0.5f, body[OpenPoseJoint.NOSE]!!.x, 0.001f)
+        assertEquals(0.43f, body[OpenPoseJoint.LEFT_SHOULDER]!!.x, 0.001f)
+        assertEquals(0.57f, body[OpenPoseJoint.RIGHT_SHOULDER]!!.x, 0.001f)
+        // Crossed arms: the left wrist really is to the right of the right one.
+        assertTrue(body[OpenPoseJoint.LEFT_WRIST]!!.x > body[OpenPoseJoint.RIGHT_WRIST]!!.x)
+    }
+
+    @Test
+    fun `a real pose converts to something the weapon can be rigged against`() {
+        val body = assertNotNull(OpenPoseJson.parse(armsCrossed))
+        val pose = assertNotNull(OpenPoseImport.toPose(body, weaponSide = BodySide.RIGHT))
+
+        assertEquals(0.42f, pose.require(Joint.HAND_NEAR).x, 0.001f)
+        // And a grip falls straight out of it, which is the whole point of
+        // reading keypoints rather than just using the picture.
+        assertTrue(pose.weaponGrip().weaponDegrees.isFinite())
+    }
+
+    @Test
+    fun `a pose that reaches outside the frame is kept, then brought back in`() {
+        // Arms above the head put wrists at y = -0.02. A reader that discarded
+        // out-of-frame points would quietly drop the most extreme poses, which
+        // are the ones worth importing.
+        val body = assertNotNull(OpenPoseJson.parse(armsAboveHead))
+        assertEquals(-0.02f, body[OpenPoseJoint.LEFT_WRIST]!!.y, 0.001f)
+
+        val fitted = OpenPoseImport.normalised(
+            assertNotNull(OpenPoseImport.toPose(body, weaponSide = BodySide.RIGHT)),
+        )
+        assertTrue(fitted.joints.values.all { it.y in 0f..1f }, "a joint stayed off the frame")
+    }
+
+    @Test
+    fun `the library's own canvas size does not rescale already normalised points`() {
+        // "size":640 is the SVG it draws into, not a coordinate space: the
+        // points are fractions already. Treating it as a canvas would divide
+        // them again and produce a skeleton the size of a full stop.
+        val body = assertNotNull(OpenPoseJson.parse(armsCrossed))
+        assertTrue(OpenPoseJson.looksNormalised(body))
+    }
+}
+
+/**
+ * Mirroring, which the measurements demanded.
+ *
+ * Handed a guide with the weapon arm extended one way, the model reproduced the
+ * shape of the pose and drew it on the other side. Mirroring the guide and
+ * asking again produced the same handedness, so it is the model's preference
+ * rather than a coin toss, and the rig has to be able to follow it.
+ */
+class WeaponMirrorTest {
+
+    private val anchor = WeaponAnchor(
+        xFraction = 0.86f,
+        yFraction = 0.42f,
+        rotationDegrees = 96f,
+        scale = 1f,
+    )
+
+    @Test
+    fun `mirroring reflects the hand about the centre line`() {
+        val flipped = WeaponFit(mirrored = true).applyTo(anchor)
+        assertEquals(0.14f, flipped.xFraction, 0.0001f)
+        assertEquals(anchor.yFraction, flipped.yFraction)
+    }
+
+    @Test
+    fun `the blade turns with the hand`() {
+        // Putting the sword in the correct fist pointing the wrong way reads
+        // worse than the original error did.
+        assertEquals(-96f, WeaponFit(mirrored = true).applyTo(anchor).rotationDegrees, 0.0001f)
+    }
+
+    @Test
+    fun `an offset still applies after the flip, not before it`() {
+        val fitted = WeaponFit(offsetX = 0.05f, mirrored = true).applyTo(anchor)
+        assertEquals(0.19f, fitted.xFraction, 0.0001f)
+    }
+
+    @Test
+    fun `mirroring is not the identity, so it survives being saved`() {
+        assertTrue(!WeaponFit(mirrored = true).isIdentity)
+        assertTrue(WeaponFit().isIdentity)
+    }
+
+    @Test
+    fun `a whole sheet mirrors together`() {
+        val sheet = SpriteSheet(
+            id = "t", name = "T", columns = 4, rows = 1, frameWidth = 96, frameHeight = 96,
+            clips = listOf(AnimationClip(AnimationState.ATTACK, 0, 4, loops = false)),
+        )
+        val plain = WeaponPosing.rigFor(sheet)
+        val flipped = WeaponPosing.rigFor(sheet, WeaponFit(mirrored = true))
+        for (frame in 0 until 4) {
+            val before = assertNotNull(plain.anchorFor(frame))
+            val after = assertNotNull(flipped.anchorFor(frame))
+            assertEquals(1f - before.xFraction, after.xFraction, 0.0001f)
+        }
+    }
+}

@@ -289,10 +289,39 @@ limb lying along its own colour can still be misread.
 order exactly, so a pose authored here drops into that ecosystem unchanged.
 Interoperability that only reads is half a feature.
 
+Two things about this were measured rather than assumed, and both changed the
+design. A real library publishes its keypoints as `{x, y}` objects — a fourth
+shape none of the documented readers handled, and one that would have been
+rejected as not a pose at all. And it draws its skeleton previews in Material
+blues and pinks rather than the canonical eighteen, so reading a downloaded PNG
+back finds nothing. That is the right failure — the image still works as a guide
+and only the weapon anchor is lost — but it makes pixel-reading the fallback
+route and pasted keypoints the main one. Exact beats inferred.
+
 The conversion that matters is the one nobody writes down: OpenPose names sides
 from the subject, this engine names them from the camera. Which of the subject's
 sides is nearer depends on which way they face, so it is a parameter rather than
 an assumption — get it wrong and the sword is in the hand the viewer cannot see.
+
+## What a guide does and does not control
+
+Measured against a live model, with the same character and the same prompt text
+and only the guide added. Pose *structure* is followed well: asked for an impact
+— weight forward, arms extended — the unguided attempt returned a compact
+cross-body guard, and the guided one returned a full lunge with the arm
+extended and the body leaning into it. That is the whole case for the skeleton,
+and it holds.
+
+Handedness is not followed. The guide put the weapon arm on one side; the
+drawing put it on the other. Mirroring the guide and asking again produced the
+*same* handedness, so this is the model imposing its own rather than a coin
+toss, and no phrasing of the prompt is going to argue it out of that.
+
+So `WeaponFit` carries a mirror. A whole flip rather than a wider offset,
+because it is one: the hand measured at 0.86 of the frame where the rig expected
+0.2, and halfway between those is the character's navel. The rotation negates
+with it, since a sword in the correct fist pointing the wrong way reads worse
+than the original error did.
 
 ## Why weapons are not drawn on characters
 

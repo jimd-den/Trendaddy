@@ -85,11 +85,17 @@ object OpenPoseJson {
         }
 
     /**
-     * Flattens `[[x, y], ...]` and `[[x, y, c], ...]` alongside `[x, y, c, ...]`.
+     * Flattens every shape a keypoint list turns up in.
      *
-     * All three are in circulation. The pairs form needs a confidence inventing
-     * for it, and inventing 1 is right: a tool that omitted confidence did so
-     * because every point it kept was one it was sure of.
+     * `[x, y, c, ...]`, `[[x, y], ...]`, `[[x, y, c], ...]` and
+     * `[{"x": .., "y": ..}, ...]`. All four are in circulation, and the last
+     * was found the only way it could be — in a real pose library's page, which
+     * stores exactly that and would have been rejected by the first three
+     * readers as not a pose at all.
+     *
+     * The forms without a confidence get 1 invented for them, which is right: a
+     * tool that omitted confidence did so because every point it kept was one
+     * it was sure of.
      */
     private fun flatten(element: JsonElement): List<Float> {
         val array = element as? JsonArray ?: return emptyList()
@@ -97,11 +103,22 @@ object OpenPoseJson {
         if (direct.size == array.size) return direct
 
         return array.flatMap { entry ->
-            val inner = (entry as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.floatOrNull }
-                ?: return@flatMap emptyList()
-            when (inner.size) {
-                2 -> listOf(inner[0], inner[1], 1f)
-                3 -> inner
+            when (entry) {
+                is JsonArray -> {
+                    val inner = entry.mapNotNull { (it as? JsonPrimitive)?.floatOrNull }
+                    when (inner.size) {
+                        2 -> listOf(inner[0], inner[1], 1f)
+                        3 -> inner
+                        else -> emptyList()
+                    }
+                }
+
+                is JsonObject -> {
+                    val x = entry.floatField("x") ?: return@flatMap emptyList()
+                    val y = entry.floatField("y") ?: return@flatMap emptyList()
+                    listOf(x, y, entry.floatField("confidence", "c", "score") ?: 1f)
+                }
+
                 else -> emptyList()
             }
         }
@@ -121,14 +138,26 @@ object OpenPoseJson {
         val obj = (root as? JsonObject)
             ?: (root as? JsonArray)?.firstOrNull()?.let { it as? JsonObject }
             ?: return 1f to 1f
-        val width = obj.floatField("canvas_width", "width", "image_width")
-        val height = obj.floatField("canvas_height", "height", "image_height")
+        val width = obj.positiveField("canvas_width", "width", "image_width")
+        val height = obj.positiveField("canvas_height", "height", "image_height")
         return (width ?: 1f) to (height ?: 1f)
     }
 
+    /** Any numeric value. Canvas sizes use [positiveField]; coordinates may be zero or negative. */
     private fun JsonObject.floatField(vararg names: String): Float? = names.firstNotNullOfOrNull {
-        (this[it] as? JsonPrimitive)?.floatOrNull?.takeIf { value -> value > 0f }
+        (this[it] as? JsonPrimitive)?.floatOrNull
     }
+
+    /**
+     * A canvas size, which must be positive.
+     *
+     * Kept apart from [floatField] because a keypoint legitimately sits at zero
+     * — or outside the frame entirely, which real library poses do for arms
+     * raised above the head — and a reader that discarded those would quietly
+     * drop the most extreme poses, which are the ones worth importing.
+     */
+    private fun JsonObject.positiveField(vararg names: String): Float? =
+        floatField(*names)?.takeIf { it > 0f }
 
     /**
      * Whether a parsed body is already in fractions of a frame.

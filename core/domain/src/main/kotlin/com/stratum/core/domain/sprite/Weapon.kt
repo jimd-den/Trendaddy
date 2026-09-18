@@ -144,14 +144,40 @@ data class WeaponFit(
     val offsetY: Float = 0f,
     /** Multiplies the weapon's reach, for a character drawn larger or smaller in its cell. */
     val scale: Float = 1f,
+    /**
+     * Flips the rig about the centre line, because the drawing came back
+     * mirrored from the guide.
+     *
+     * Measured, and it is not a subtle effect. Handed a stick figure with the
+     * weapon arm extended to one side, an image model reproduces the *shape* of
+     * the pose faithfully — the lunge, the lean, the extension — and then draws
+     * it on whichever side it prefers. Mirroring the guide and asking again
+     * produced the same handedness, so this is the model imposing its own, not
+     * a coin toss.
+     *
+     * A whole flip rather than a large [offsetX], because it is one: the hand
+     * measured at 0.86 of the frame where the rig expected 0.2, which no
+     * sensible offset range would ever cover, and halfway between them is the
+     * character's navel.
+     */
+    val mirrored: Boolean = false,
 ) {
-    fun applyTo(anchor: WeaponAnchor): WeaponAnchor = anchor.copy(
-        xFraction = anchor.xFraction + offsetX,
-        yFraction = anchor.yFraction + offsetY,
-        scale = anchor.scale * scale,
-    )
+    fun applyTo(anchor: WeaponAnchor): WeaponAnchor {
+        val x = if (mirrored) 1f - anchor.xFraction else anchor.xFraction
+        return anchor.copy(
+            xFraction = x + offsetX,
+            yFraction = anchor.yFraction + offsetY,
+            scale = anchor.scale * scale,
+            // The blade has to turn with the hand. Reflecting a rotation about
+            // the vertical negates it; leaving it alone would put the sword in
+            // the correct fist pointing the wrong way, which reads worse than
+            // the original error did.
+            rotationDegrees = if (mirrored) -anchor.rotationDegrees else anchor.rotationDegrees,
+        )
+    }
 
-    val isIdentity: Boolean get() = offsetX == 0f && offsetY == 0f && scale == 1f
+    val isIdentity: Boolean
+        get() = offsetX == 0f && offsetY == 0f && scale == 1f && !mirrored
 
     companion object {
         val none = WeaponFit()

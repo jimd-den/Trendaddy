@@ -24,7 +24,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -114,6 +118,7 @@ fun PoseForgeScreen(
         onBuildSheet = viewModel::buildSheet,
         onRedrawPose = viewModel::redrawPose,
         onImportPose = onImportPose,
+        onImportJson = viewModel::importGuideJson,
         onGuideModeChange = viewModel::selectGuideMode,
         onGuideStyleChange = viewModel::selectGuideStyle,
         onClearImported = viewModel::clearImported,
@@ -142,6 +147,7 @@ fun PoseForgeContent(
     onGuideStyleChange: (PoseGuideStyle) -> Unit = {},
     onClearImported: (PoseStep) -> Unit = {},
     onImportPose: (PoseStep) -> Unit = {},
+    onImportJson: (PoseStep, String) -> Unit = { _, _ -> },
     onDismiss: () -> Unit = {},
     onBack: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
@@ -203,7 +209,10 @@ fun PoseForgeContent(
         GuidePanel(state, onGuideModeChange, onGuideStyleChange)
 
         Spacer(Modifier.height(Space.medium))
-        AnimationPanel(state, onBuildAnimations, onStop, onRedrawPose, onImportPose, onClearImported)
+        AnimationPanel(
+            state, onBuildAnimations, onStop, onRedrawPose, onImportPose, onClearImported,
+            onImportJson,
+        )
 
         Spacer(Modifier.height(Space.medium))
         SheetPanel(state, sheetImage, onCellSizeChange, onBuildSheet)
@@ -423,7 +432,48 @@ private fun AnimationPanel(
     onRedrawPose: (String) -> Unit,
     onImportPose: (PoseStep) -> Unit = {},
     onClearImported: (PoseStep) -> Unit = {},
+    onImportJson: (PoseStep, String) -> Unit = { _, _ -> },
 ) {
+    // Which frame a pasted pose is destined for. Pasting is the exact route:
+    // reading a rendered skeleton back depends on the library having used the
+    // canonical palette, and a real one checked does not.
+    var pasteInto by remember { mutableStateOf<PoseStep?>(null) }
+    var pasted by remember { mutableStateOf("") }
+
+    val target = pasteInto
+    if (target != null) {
+        AlertDialog(
+            onDismissRequest = { pasteInto = null },
+            title = { Text("Paste pose keypoints") },
+            text = {
+                Column {
+                    Text(
+                        text = "OpenPose JSON for ${target.key}. Seventeen or eighteen " +
+                            "keypoints, however the library writes them.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(Space.small))
+                    OutlinedTextField(
+                        value = pasted,
+                        onValueChange = { pasted = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 4,
+                        maxLines = 8,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onImportJson(target, pasted)
+                    pasted = ""
+                    pasteInto = null
+                }) { Text("Import") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pasteInto = null }) { Text("Cancel") }
+            },
+        )
+    }
     val colors = StratumTheme.colors
 
     StratumSection(
@@ -478,6 +528,35 @@ private fun AnimationPanel(
                     }
                 }
             }
+        }
+
+        if (state.guides.mode == PoseGuideMode.IMPORTED) {
+            Spacer(Modifier.height(Space.small))
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(Space.small),
+            ) {
+                Text(
+                    text = "Import into",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.inkMuted,
+                )
+                state.script.steps.forEach { step ->
+                    StratumChip(
+                        label = step.key,
+                        selected = state.isImported(step),
+                        onClick = { pasteInto = step },
+                    )
+                }
+            }
+            Spacer(Modifier.height(Space.tight))
+            Text(
+                text = "Tap a frame above to pick a skeleton PNG, or a name here to paste its " +
+                    "keypoints. Pasting is exact; reading a PNG back only works when the " +
+                    "library drew it in the standard OpenPose colours.",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkMuted,
+            )
         }
 
         Spacer(Modifier.height(Space.medium))

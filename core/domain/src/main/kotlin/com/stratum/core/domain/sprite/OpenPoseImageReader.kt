@@ -23,6 +23,14 @@ import kotlin.math.abs
  * limb — but a pose whose arm lies exactly along its own colour can still be
  * misread, which is why the result carries a confidence and the caller is
  * expected to look at it.
+ *
+ * The larger limitation is the palette itself, and it was measured rather than
+ * guessed: a real pose library draws its skeletons in Material blues and pinks,
+ * not the canonical eighteen, so nothing here matches and this returns null.
+ * That is the right failure — the image is still a perfectly good guide for the
+ * drawing, and only the weapon anchor is lost — but it means this is the
+ * fallback route and not the main one. Where a library publishes its keypoints,
+ * [OpenPoseJson] reads them exactly, and exact beats inferred every time.
  */
 object OpenPoseImageReader {
 
