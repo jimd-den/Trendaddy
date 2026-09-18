@@ -82,6 +82,7 @@ class PlayViewModel(
      * HUD recomposed twenty times a second for nothing.
      */
     private val flashFor: (String) -> Float = { id -> session.flashFor(id) }
+    private val impactFor: (String) -> Float = { id -> session.impactFor(id) }
     private val animationFor: (String) -> AnimationPlayback = { id -> session.animationFor(id) }
     private val insertFor: (String) -> com.stratum.core.domain.item.InsertDefinition? =
         { id -> session.insertOrNull(id) }
@@ -392,6 +393,9 @@ class PlayViewModel(
     }
 
     fun place(target: BlockPos) {
+        // The session stops its own mining, but the coroutine driving it lives
+        // here and would otherwise keep calling mine() on the old target.
+        miningJob?.cancel()
         when (val result = session.place(target)) {
             is PlaceResult.Placed -> publish(message = "Placed ${result.block.displayName}")
             is PlaceResult.Rejected -> publish(message = placeRejectionMessage(result.reason))
@@ -423,6 +427,7 @@ class PlayViewModel(
             feedback = snapshot.feedback,
             playerFlash = snapshot.playerFlash,
             flashFor = flashFor,
+            impactFor = impactFor,
             playerAnimation = snapshot.playerAnimation,
             animationFor = animationFor,
             spriteFor = spriteResolver,
@@ -512,6 +517,8 @@ data class PlayUiState(
     val playerFlash: Float = 0f,
     /** Per-actor hit flash, read by the renderer for each visible monster. */
     val flashFor: (String) -> Float = { 0f },
+    /** How hard an actor is being knocked back, 0..1. */
+    val impactFor: (String) -> Float = { 0f },
     val playerAnimation: AnimationPlayback = AnimationPlayback(),
     val animationFor: (String) -> AnimationPlayback = { AnimationPlayback() },
     val spriteFor: (SpriteKey) -> DrawableSprite? = { null },

@@ -24,6 +24,7 @@ data class InsertDefinition(
      */
     val convertsDamageType: Boolean = false,
     val tier: Int = 1,
+    val glyph: String = "💠",
     val color: Long = 0xFF7FD4E0,
     val minItemLevel: Int = 1,
     val weight: Int = 100,

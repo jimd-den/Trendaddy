@@ -47,6 +47,7 @@ internal object IgboPackCombat {
         WeaponBase(
             id = "$NS:mma_nkwu",
             name = "Mma Nkwu",
+            glyph = "🔪",
             description = "A curved bronze machete cast with spiral filigree. Fast, and it digs.",
             minDamage = 9,
             maxDamage = 15,
@@ -60,6 +61,7 @@ internal object IgboPackCombat {
         WeaponBase(
             id = "$NS:alo_staff",
             name = "Alo War Staff",
+            glyph = "🔱",
             description = "The ringed bronze staff of a titled man. Slow, heavy, and long.",
             minDamage = 18,
             maxDamage = 30,
@@ -73,6 +75,7 @@ internal object IgboPackCombat {
         WeaponBase(
             id = "$NS:ofo_scepter",
             name = "Ofo Scepter",
+            glyph = "🔮",
             description = "A staff of moral authority. It answers an argument with lightning.",
             minDamage = 12,
             maxDamage = 22,
@@ -86,6 +89,7 @@ internal object IgboPackCombat {
         WeaponBase(
             id = "$NS:ikenga_cleaver",
             name = "Ikenga Cleaver",
+            glyph = "⚔\uFE0F",
             description = "A two-handed ceremonial blade, horned like the shrine it came from.",
             minDamage = 26,
             maxDamage = 44,
@@ -99,6 +103,7 @@ internal object IgboPackCombat {
         WeaponBase(
             id = "$NS:nzu_wand",
             name = "Nzu Chalk Wand",
+            glyph = "✨",
             description = "White chalk bound in raffia. What it marks, it can also unmake.",
             minDamage = 10,
             maxDamage = 18,
@@ -145,6 +150,7 @@ internal object IgboPackCombat {
         InsertDefinition(
             id = "$NS:ogu_bead",
             name = "Ogu Bead",
+            glyph = "📿",
             description = "Carved from a staff of truth. Quiet, and it hits harder than it looks.",
             stat = AffixStat.ATTACK_POWER,
             value = 4f,
@@ -154,6 +160,7 @@ internal object IgboPackCombat {
         InsertDefinition(
             id = "$NS:iron_stud",
             name = "Iron Stud",
+            glyph = "🔩",
             description = "Hammered flat and set into the haft. It is not subtle.",
             stat = AffixStat.ARMOUR,
             value = 5f,
@@ -163,6 +170,7 @@ internal object IgboPackCombat {
         InsertDefinition(
             id = "$NS:palm_resin",
             name = "Palm Resin",
+            glyph = "💧",
             description = "Sticky, and it makes a grip you do not have to think about.",
             stat = AffixStat.ATTACK_SPEED,
             value = 0.12f,
@@ -172,6 +180,7 @@ internal object IgboPackCombat {
         InsertDefinition(
             id = "$NS:whetted_flake",
             name = "Whetted Flake",
+            glyph = "🔸",
             description = "A splinter of the edge, set back into the edge.",
             stat = AffixStat.CRIT_CHANCE,
             value = 0.05f,
@@ -182,6 +191,7 @@ internal object IgboPackCombat {
         InsertDefinition(
             id = "$NS:mining_flint",
             name = "Mining Flint",
+            glyph = "⛏\uFE0F",
             description = "For the ones who came down here to dig, not to fight.",
             stat = AffixStat.MINING_SPEED,
             value = 0.35f,
@@ -194,6 +204,7 @@ internal object IgboPackCombat {
         InsertDefinition(
             id = "$NS:thunder_shard",
             name = "Thunder Shard",
+            glyph = "⚡",
             description = "Amadioha's ram struck a rock and this is what was left standing.",
             stat = AffixStat.ATTACK_POWER,
             value = 6f,
@@ -207,6 +218,7 @@ internal object IgboPackCombat {
         InsertDefinition(
             id = "$NS:sun_ember",
             name = "Sun Ember",
+            glyph = "☀\uFE0F",
             description = "Anyanwu's light, kept in a bead that has not cooled since.",
             stat = AffixStat.ATTACK_POWER,
             value = 6f,
@@ -220,6 +232,7 @@ internal object IgboPackCombat {
         InsertDefinition(
             id = "$NS:venom_pearl",
             name = "Venom Pearl",
+            glyph = "🌿",
             description = "Idemili's river keeps what it swallows, and sometimes gives it back.",
             stat = AffixStat.ATTACK_POWER,
             value = 5f,
@@ -233,6 +246,7 @@ internal object IgboPackCombat {
         InsertDefinition(
             id = "$NS:ancestor_nzu",
             name = "Ancestor Nzu",
+            glyph = "👻",
             description = "White chalk pressed into the socket. What you swing, they swing.",
             stat = AffixStat.LIFE_STEAL,
             value = 0.06f,
@@ -246,6 +260,7 @@ internal object IgboPackCombat {
         InsertDefinition(
             id = "$NS:igbo_ukwu_bronze",
             name = "Igbo-Ukwu Bronze",
+            glyph = "🏺",
             description = "Cast a thousand years ago by someone who expected it to outlast you.",
             stat = AffixStat.CRIT_MULTIPLIER,
             value = 0.4f,

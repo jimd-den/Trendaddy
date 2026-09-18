@@ -51,7 +51,7 @@ class MovementTest {
         repeat(20) { session.tick(0.05f) }
 
         val travelled = session.player.position.x - start.x
-        assertEquals(WorldSession.WALK_SPEED, travelled, absoluteTolerance = 0.3f)
+        assertEquals(PlayerMotion.WALK_SPEED, travelled, absoluteTolerance = 0.3f)
     }
 
     @Test

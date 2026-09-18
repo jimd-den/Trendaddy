@@ -20,6 +20,8 @@ import com.stratum.core.domain.ai.toDomain
 import com.stratum.feature.forge.ForgeScreenContent
 import com.stratum.feature.forge.ForgeStatus
 import com.stratum.feature.forge.ForgeUiState
+import com.stratum.feature.forge.SpriteForgeContent
+import com.stratum.feature.forge.SpriteForgeUiState
 import com.stratum.core.domain.content.ClassDraft
 import com.stratum.core.domain.content.ClassOptions
 import com.stratum.feature.hero.ClassForgeScreenContent
@@ -261,6 +263,7 @@ class StratumScreenshotTest {
             .toggling(content.skills[1].id)
             .copy(startingWeaponId = content.weapons.first().id)
             .togglingBlock(content.registry.all.first { !it.isAir && it.isBreakable }.id)
+            .copy(spriteSetId = "hero:nsibidi_scribe")
 
         composeTestRule.setContent {
             StratumTheme(palette = content.palette, darkTheme = true) {
@@ -271,6 +274,18 @@ class StratumScreenshotTest {
                         skills = content.skills,
                         weapons = content.weapons,
                         blocks = content.registry.all.filter { !it.isAir && it.isBreakable },
+                        // Art the sprite forge has drawn, one of it chosen: the
+                        // picker only exists when there is something to pick.
+                        sheets = listOf(
+                            com.stratum.core.domain.sprite.SpriteSheet(
+                                id = "hero:ancestral_warrior", name = "Ancestral Warrior",
+                                columns = 4, rows = 4, frameWidth = 64, frameHeight = 64,
+                            ),
+                            com.stratum.core.domain.sprite.SpriteSheet(
+                                id = "hero:nsibidi_scribe", name = "Nsibidi Scribe",
+                                columns = 4, rows = 4, frameWidth = 64, frameHeight = 64,
+                            ),
+                        ),
                         saved = listOf(draft.copy(name = "Ogu Warden").toDefinition()),
                     ),
                     modifier = Modifier.fillMaxSize(),
@@ -380,6 +395,49 @@ class StratumScreenshotTest {
             }
         }
         composeTestRule.onRoot().captureRoboImage(filePath = "src/test/screenshots/anvil.png")
+    }
+
+    @Test
+    fun sprite_forge_rejection() {
+        // The view that matters: the model said no, and the panel shows exactly
+        // what was sent and exactly what came back.
+        val attempt = com.stratum.core.domain.ai.GenerationAttempt(
+            id = "img_1",
+            label = "Image · 512×512",
+            endpoint = "https://openrouter.ai/api/v1/images/generations",
+            model = "anthropic/claude-sonnet-4",
+            requestBody = "{\"model\":\"anthropic/claude-sonnet-4\"," +
+                "\"prompt\":\"A 4x4 sprite sheet of an ancestral warrior…\"," +
+                "\"n\":1,\"size\":\"512x512\",\"response_format\":\"b64_json\"}",
+            redactedHeaders = mapOf(
+                "Authorization" to "Bearer ****",
+                "Content-Type" to "application/json",
+            ),
+            status = 404,
+            responseBody = "{\"error\":{\"message\":\"No endpoints found for " +
+                "anthropic/claude-sonnet-4 that support image generation.\"," +
+                "\"code\":404}}",
+            failure = "'anthropic/claude-sonnet-4' is not available on this provider.",
+            durationMillis = 812,
+        )
+
+        composeTestRule.setContent {
+            StratumTheme(palette = IgboContentPack.palette, darkTheme = true) {
+                SpriteForgeContent(
+                    state = SpriteForgeUiState(
+                        subject = "ancestral warrior",
+                        style = "bronze age, high contrast",
+                        providerConfigured = true,
+                        error = attempt.failure,
+                        attempt = attempt,
+                        detailsOpen = true,
+                        stage = com.stratum.core.domain.ai.GenerationStage.FAILED,
+                    ),
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+        composeTestRule.onRoot().captureRoboImage(filePath = "src/test/screenshots/sprite_rejection.png")
     }
 
     @Test

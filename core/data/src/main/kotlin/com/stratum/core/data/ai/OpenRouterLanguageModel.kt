@@ -1,7 +1,10 @@
 package com.stratum.core.data.ai
 
 import com.stratum.core.domain.ai.CompletionRequest
+import com.stratum.core.domain.ai.GenerationAttempt
 import com.stratum.core.domain.ai.GenerationException
+import com.stratum.core.domain.ai.GenerationObserver
+import com.stratum.core.domain.ai.GenerationStage
 import com.stratum.core.domain.ai.LanguageModelPort
 import com.stratum.core.domain.ai.ModelCatalogPort
 import com.stratum.core.domain.ai.ModelDescriptor
@@ -29,30 +32,47 @@ class OpenRouterLanguageModel(
     private val moshi: Moshi = Moshi.Builder().build(),
 ) : LanguageModelPort, ModelCatalogPort {
 
-    override suspend fun complete(request: CompletionRequest): Result<String> =
+    override suspend fun complete(
+        request: CompletionRequest,
+        observer: GenerationObserver,
+    ): Result<String> =
         withContext(Dispatchers.IO) {
+            observer.onStage(GenerationStage.PREPARING)
             val config = configProvider()
             if (config.apiKey.isBlank()) {
+                observer.onStage(GenerationStage.FAILED)
                 return@withContext Result.failure(
                     GenerationException("No API key is configured for ${config.displayName}"),
                 )
             }
 
-            runCatching {
-                val payload = moshi.adapter(ChatRequestDto::class.java).toJson(
-                    ChatRequestDto(
-                        model = request.modelId ?: config.model,
-                        messages = listOf(
-                            ChatMessageDto("system", request.systemPrompt),
-                            ChatMessageDto("user", request.userPrompt),
-                        ),
-                        temperature = request.temperature.toDouble(),
-                        max_tokens = request.maxTokens,
+            val model = request.modelId ?: config.model
+            val endpoint = "${config.baseUrl.trimEnd('/')}/chat/completions"
+            val payload = moshi.adapter(ChatRequestDto::class.java).toJson(
+                ChatRequestDto(
+                    model = model,
+                    messages = listOf(
+                        ChatMessageDto("system", request.systemPrompt),
+                        ChatMessageDto("user", request.userPrompt),
                     ),
-                )
+                    temperature = request.temperature.toDouble(),
+                    max_tokens = request.maxTokens,
+                ),
+            )
+            // The key travels in a header and is never recorded.
+            val headers = mapOf(
+                "Authorization" to "Bearer ****",
+                "Content-Type" to "application/json",
+                "HTTP-Referer" to config.refererUrl,
+                "X-Title" to config.appTitle,
+            )
+            var status: Int? = null
+            var responseBody: String? = null
+            val startedAt = System.currentTimeMillis()
 
+            val result = runCatching {
                 val httpRequest = Request.Builder()
-                    .url("${config.baseUrl.trimEnd('/')}/chat/completions")
+                    .url(endpoint)
                     .addHeader("Authorization", "Bearer ${config.apiKey}")
                     .addHeader("Content-Type", "application/json")
                     .apply {
@@ -64,8 +84,12 @@ class OpenRouterLanguageModel(
                     .post(payload.toRequestBody(JSON_MEDIA_TYPE))
                     .build()
 
+                observer.onStage(GenerationStage.SENDING)
                 client.newCall(httpRequest).execute().use { response ->
+                    observer.onStage(GenerationStage.READING)
+                    status = response.code
                     val body = response.body?.string().orEmpty()
+                    responseBody = body.take(MAX_RECORDED_BODY)
                     if (!response.isSuccessful) {
                         throw GenerationException(describeFailure(response.code, body))
                     }
@@ -74,6 +98,23 @@ class OpenRouterLanguageModel(
                         ?: throw GenerationException("The model returned an empty reply")
                 }
             }
+
+            observer.onAttempt(
+                GenerationAttempt(
+                    id = "txt_${'$'}startedAt",
+                    label = "Text · ${'$'}{request.maxTokens} tokens",
+                    endpoint = endpoint,
+                    model = model,
+                    requestBody = payload,
+                    redactedHeaders = headers,
+                    status = status,
+                    responseBody = responseBody,
+                    failure = result.exceptionOrNull()?.message,
+                    durationMillis = System.currentTimeMillis() - startedAt,
+                ),
+            )
+            observer.onStage(if (result.isSuccess) GenerationStage.DONE else GenerationStage.FAILED)
+            result
         }
 
     override suspend fun availableModels(): Result<List<ModelDescriptor>> =
@@ -115,6 +156,8 @@ class OpenRouterLanguageModel(
     }
 
     private companion object {
+        /** Enough to read an error without keeping a whole generation in memory. */
+        const val MAX_RECORDED_BODY = 4000
         val JSON_MEDIA_TYPE = "application/json".toMediaType()
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()

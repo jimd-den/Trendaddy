@@ -27,6 +27,9 @@ class SpriteLibrary(context: Context) {
 
     private val bitmaps = HashMap<String, Bitmap?>()
 
+    /** Whether a decoded sheet has anything drawn on it. Cached beside the pixels. */
+    private val drawn = HashMap<String, Boolean>()
+
     /** Sheets on disk, newest first. */
     fun all(): List<SpriteSheet> =
         root.listFiles { file -> file.name.endsWith(METADATA_SUFFIX) }
@@ -41,6 +44,7 @@ class SpriteLibrary(context: Context) {
         // Metadata without an image would be a sheet that cannot be drawn.
         File(root, "$slug$METADATA_SUFFIX").writeText(json.encodeToString(sheet.toDto()))
         bitmaps.remove(sheet.id)
+        drawn.remove(sheet.id)
     }
 
     fun delete(sheetId: String) {
@@ -48,6 +52,7 @@ class SpriteLibrary(context: Context) {
         File(root, "$slug$METADATA_SUFFIX").delete()
         File(root, "$slug$IMAGE_SUFFIX").delete()
         bitmaps.remove(sheetId)
+        drawn.remove(sheetId)
     }
 
     /**
@@ -69,7 +74,48 @@ class SpriteLibrary(context: Context) {
         }.getOrNull()
     }
 
-    fun clearCache() = bitmaps.clear()
+    /**
+     * The sheet's pixels, or null when there is nothing on them to draw.
+     *
+     * A blank sheet is not a theoretical case: a generation that came back
+     * empty, or one keyed too hard by an older build, is stored like any other
+     * and then resolves ahead of the art that does work. Answering null lets
+     * the caller move on to the next candidate instead of drawing nothing and
+     * leaving the player to wonder why their character has no skin.
+     */
+    fun drawableBitmapFor(sheetId: String): Bitmap? {
+        val bitmap = bitmapFor(sheetId) ?: return null
+        val hasArt = drawn.getOrPut(sheetId) { anythingDrawnOn(bitmap) }
+        return if (hasArt) bitmap else null
+    }
+
+    /**
+     * Samples a lattice rather than every pixel. A sheet is a megapixel and
+     * this is asked on every resolver rebuild; the question is only whether
+     * *anything* is there, which a few thousand samples settle.
+     */
+    private fun anythingDrawnOn(bitmap: Bitmap): Boolean {
+        val stepX = (bitmap.width / SAMPLES_ACROSS).coerceAtLeast(1)
+        val stepY = (bitmap.height / SAMPLES_ACROSS).coerceAtLeast(1)
+        var sampled = 0
+        var opaque = 0
+        var y = 0
+        while (y < bitmap.height) {
+            var x = 0
+            while (x < bitmap.width) {
+                sampled++
+                if ((bitmap.getPixel(x, y) ushr 24) and 0xFF > 0) opaque++
+                x += stepX
+            }
+            y += stepY
+        }
+        return sampled > 0 && opaque > sampled * MIN_DRAWN
+    }
+
+    fun clearCache() {
+        bitmaps.clear()
+        drawn.clear()
+    }
 
     private fun readMetadata(file: File): SpriteSheet? = runCatching {
         json.decodeFromString(SheetDto.serializer(), file.readText()).toDomain()
@@ -83,6 +129,10 @@ class SpriteLibrary(context: Context) {
         const val IMAGE_SUFFIX = ".png"
         const val METADATA_SUFFIX = ".json"
         val NON_FILE_SAFE = Regex("[^A-Za-z0-9._-]")
+        /** Samples per axis when asking whether a sheet has any art on it. */
+        const val SAMPLES_ACROSS = 64
+        /** Below this share of samples drawn on, there is no sprite there. */
+        const val MIN_DRAWN = 0.005f
     }
 }
 

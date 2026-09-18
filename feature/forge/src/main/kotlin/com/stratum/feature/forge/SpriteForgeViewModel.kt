@@ -6,6 +6,13 @@ import androidx.lifecycle.viewModelScope
 import com.stratum.core.domain.ai.GenerateSpriteSheetUseCase
 import com.stratum.core.domain.ai.SheetLayout
 import com.stratum.core.domain.ai.SpriteSheetRequest
+import com.stratum.core.domain.ai.GenerationAttempt
+import com.stratum.core.domain.ai.GenerationJournal
+import com.stratum.core.domain.ai.GenerationObserver
+import com.stratum.core.domain.ai.GenerationStage
+import com.stratum.core.domain.sprite.GridOutcome
+import com.stratum.core.domain.sprite.KeyStrategy
+import com.stratum.core.domain.sprite.SheetPreparation
 import com.stratum.core.domain.sprite.SpriteSheet
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,10 +28,16 @@ import kotlinx.coroutines.launch
  */
 class SpriteForgeViewModel(
     private val generateSheet: GenerateSpriteSheetUseCase,
-    private val saveSheet: (SpriteSheet, ByteArray) -> Unit,
+    /**
+     * Saves the sheet and reports what had to be done to it: the background
+     * keyed out, and the grid checked against what the model actually drew.
+     */
+    private val saveSheet: (SpriteSheet, ByteArray) -> SheetPreparation,
     private val loadSheets: () -> List<SpriteSheet>,
     private val deleteSheet: (String) -> Unit,
     private val isProviderConfigured: () -> Boolean,
+    /** The last few provider calls, so a failure can be read rather than guessed at. */
+    private val journal: GenerationJournal = GenerationJournal(),
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(
@@ -41,6 +54,16 @@ class SpriteForgeViewModel(
 
     fun updateStyle(style: String) {
         _state.value = _state.value.copy(style = style)
+    }
+
+    /** Fills the style field from a preset, or clears it by tapping the chosen one again. */
+    fun selectStyle(style: SpriteStyle) {
+        val current = _state.value
+        _state.value = if (current.style == style.direction) {
+            current.copy(style = "")
+        } else {
+            current.copy(style = style.direction)
+        }
     }
 
     fun selectTarget(target: SpriteTarget) {
@@ -66,7 +89,28 @@ class SpriteForgeViewModel(
             return
         }
 
-        _state.value = current.copy(busy = true, error = null, lastGenerated = null)
+        _state.value = current.copy(
+            busy = true,
+            error = null,
+            lastGenerated = null,
+            stage = GenerationStage.PREPARING,
+            attempt = null,
+        )
+
+        // Reports what the adapter is doing and exactly what it sent. An image
+        // model can sit on a request for minutes; a spinner that says nothing
+        // for minutes is indistinguishable from a hang, and a rejection with no
+        // request to look at is indistinguishable from a bug.
+        val observer = object : GenerationObserver {
+            override fun onStage(stage: GenerationStage) {
+                _state.value = _state.value.copy(stage = stage)
+            }
+
+            override fun onAttempt(attempt: GenerationAttempt) {
+                journal.record(attempt)
+                _state.value = _state.value.copy(attempt = attempt)
+            }
+        }
 
         viewModelScope.launch {
             val result = generateSheet(
@@ -76,25 +120,48 @@ class SpriteForgeViewModel(
                     styleDirection = current.style,
                     layout = current.target.layout,
                 ),
+                observer,
             )
             _state.value = result.fold(
                 onSuccess = { generated ->
-                    saveSheet(generated.sheet, generated.image.bytes)
+                    _state.value = _state.value.copy(stage = GenerationStage.SAVING)
+                    val prepared = saveSheet(generated.sheet, generated.image.bytes)
                     _state.value.copy(
                         busy = false,
+                        stage = GenerationStage.DONE,
                         sheets = loadSheets(),
-                        lastGenerated = generated.sheet,
+                        // The sheet as stored, which is not always the sheet as
+                        // asked for: a model that drew a different grid is cut
+                        // on the one it drew.
+                        lastGenerated = prepared.sheet,
+                        keyStrategy = prepared.keyStrategy,
+                        gridNote = when {
+                            // Said first, because an empty sheet makes every
+                            // other observation about it beside the point.
+                            prepared.looksEmpty ->
+                                "The model returned an all but blank image — there is nothing " +
+                                    "to draw, so the world will keep showing the fallback shape. " +
+                                    "Try again, or a different model."
+                            prepared.grid.outcome != GridOutcome.AS_ASKED -> prepared.grid.summary
+                            else -> null
+                        },
                         error = null,
                     )
                 },
                 onFailure = { cause ->
                     _state.value.copy(
                         busy = false,
+                        stage = GenerationStage.FAILED,
                         error = cause.message ?: "Generation failed.",
                     )
                 },
             )
         }
+    }
+
+    /** Opens or closes the panel showing exactly what was sent and what came back. */
+    fun toggleDetails() {
+        _state.value = _state.value.copy(detailsOpen = !_state.value.detailsOpen)
     }
 
     fun delete(sheetId: String) {
@@ -112,7 +179,7 @@ class SpriteForgeViewModel(
     companion object {
         fun factory(
             generateSheet: GenerateSpriteSheetUseCase,
-            saveSheet: (SpriteSheet, ByteArray) -> Unit,
+            saveSheet: (SpriteSheet, ByteArray) -> SheetPreparation,
             loadSheets: () -> List<SpriteSheet>,
             deleteSheet: (String) -> Unit,
             isProviderConfigured: () -> Boolean,
@@ -130,9 +197,39 @@ class SpriteForgeViewModel(
  * walks does not need an attack row, and asking a weak image model for fewer
  * frames is the single most effective way to get usable art out of it.
  */
+/**
+ * Ready-made style directions.
+ *
+ * "Style (optional)" left empty is the single biggest cause of a sheet that
+ * comes back as one soft illustration: a model given no style draws a picture,
+ * and a picture is not a sprite. These name the handful of styles that survive
+ * being cut into cells and drawn at forty pixels tall.
+ */
+enum class SpriteStyle(val label: String, val direction: String) {
+    PIXEL(
+        "Pixel art",
+        "Pixel art game sprites, limited palette, bold readable silhouette, dark outline.",
+    ),
+    CHUNKY(
+        "Chunky",
+        "Chunky low-resolution pixel art, very few colours, thick dark outline, no anti-aliasing.",
+    ),
+    INKED(
+        "Inked",
+        "Flat cel-shaded cartoon sprites, heavy black ink outline, simple shapes, no gradients.",
+    ),
+    GRIM(
+        "Grim",
+        "Dark fantasy game sprites, muted palette, hard rim light, heavy silhouette, no background.",
+    ),
+}
+
 enum class SpriteTarget(val label: String, val namespace: String, val layout: SheetLayout) {
-    HERO("Hero", "hero", SheetLayout.standard()),
-    MONSTER("Monster", "monster", SheetLayout.simple()),
+    /** The character you play. Worth the denser sheet and the extra frames. */
+    HERO("Hero", "hero", SheetLayout.detailed()),
+
+    /** A monster fights and dies; it does not need a signature power. */
+    MONSTER("Monster", "monster", SheetLayout.standard()),
 }
 
 data class SpriteForgeUiState(
@@ -144,4 +241,16 @@ data class SpriteForgeUiState(
     val lastGenerated: SpriteSheet? = null,
     val error: String? = null,
     val providerConfigured: Boolean = false,
-)
+    val stage: GenerationStage? = null,
+    /** The provider call behind the current result, successful or not. */
+    val attempt: GenerationAttempt? = null,
+    val detailsOpen: Boolean = false,
+    /** How the last sheet's background was dealt with, for the player to see. */
+    val keyStrategy: KeyStrategy? = null,
+    /** Set when the model did not draw the grid it was asked for. */
+    val gridNote: String? = null,
+) {
+    val progress: Float get() = stage?.fraction ?: 0f
+
+    val stageLabel: String? get() = stage?.label
+}

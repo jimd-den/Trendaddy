@@ -14,8 +14,12 @@ class GenerateSpriteSheetUseCaseTest {
         private val reply: Result<GeneratedImage>,
     ) : ImageModelPort {
         var lastRequest: ImageRequest? = null
-        override suspend fun generateImage(request: ImageRequest): Result<GeneratedImage> {
+        override suspend fun generateImage(
+            request: ImageRequest,
+            observer: GenerationObserver,
+        ): Result<GeneratedImage> {
             lastRequest = request
+            observer.onStage(GenerationStage.SENDING)
             return reply
         }
     }
@@ -79,14 +83,43 @@ class GenerateSpriteSheetUseCaseTest {
     }
 
     @Test
-    fun `a simple layout asks for a smaller sheet`() = runTest {
-        val model = FakeImageModel(Result.success(image(256, 128)))
+    fun `every layout asks for a square canvas a provider will actually accept`() = runTest {
+        // Asking for 384x448 because that is what a 6x7 grid of 64px frames
+        // measures gets rejected by some providers and silently rounded by
+        // others, and a sheet cut on a size that was quietly changed shears
+        // every frame. The grid belongs in the prompt, not in the canvas.
+        listOf(SheetLayout.detailed(), SheetLayout.standard(), SheetLayout.simple()).forEach { layout ->
+            val model = FakeImageModel(Result.success(image(layout.canvas, layout.canvas)))
+            GenerateSpriteSheetUseCase(model)(
+                SpriteSheetRequest(subject = "a rat", layout = layout),
+            ).getOrThrow()
+
+            val request = model.lastRequest!!
+            assertEquals(request.width, request.height, "the canvas was not square")
+            assertTrue(
+                request.width in listOf(SheetLayout.SMALL_CANVAS, SheetLayout.DEFAULT_CANVAS),
+                "asked for ${request.width}px, which is not a size providers support",
+            )
+        }
+    }
+
+    @Test
+    fun `the prompt forbids the one big character that makes a sprite roll`() = runTest {
+        // The failure behind a sprite that pans instead of animating: the model
+        // draws one large figure, the sheet is cut on a grid that was never
+        // drawn, and every frame is a crop of the same picture.
+        val model = FakeImageModel(Result.success(image(1024, 1024)))
         GenerateSpriteSheetUseCase(model)(
-            SpriteSheetRequest(subject = "a rat", layout = SheetLayout.simple()),
+            SpriteSheetRequest(subject = "a warrior", layout = SheetLayout.detailed()),
         ).getOrThrow()
 
-        assertEquals(256, model.lastRequest!!.width)
-        assertEquals(128, model.lastRequest!!.height)
+        val prompt = model.lastRequest!!.prompt
+        assertTrue(prompt.contains("42 cells"), "the prompt stopped counting the cells")
+        assertTrue(prompt.contains("1024 by 1024 pixels"))
+        assertTrue(
+            prompt.contains("Do NOT draw one large character"),
+            "the prompt stopped naming the rolling-sprite mistake",
+        )
     }
 
     @Test
@@ -100,8 +133,15 @@ class GenerateSpriteSheetUseCaseTest {
         assertTrue(prompt.contains("a storm wisp"))
         assertTrue(prompt.contains("chunky pixel art"))
         assertTrue(prompt.contains("4 columns by 4 rows"))
-        // The single most common failure is an opaque background.
-        assertTrue(prompt.contains("transparent", ignoreCase = true))
+        // The single most common failure is an opaque background, and the
+        // specific way models get it wrong is drawing the checkerboard that
+        // represents transparency. Naming the mistake is the part that works,
+        // so the prompt has to keep doing it.
+        assertTrue(prompt.contains("transparen", ignoreCase = true))
+        assertTrue(
+            prompt.contains("checkerboard", ignoreCase = true),
+            "the prompt stopped naming the checkerboard mistake",
+        )
         assertTrue(model.lastRequest!!.requireTransparency)
     }
 
@@ -113,7 +153,27 @@ class GenerateSpriteSheetUseCaseTest {
         val prompt = model.lastRequest!!.prompt
         assertTrue(prompt.contains("Row 1"))
         assertTrue(prompt.contains("walk cycle"))
-        assertTrue(prompt.contains("swinging an attack"))
+        assertTrue(prompt.contains("basic attack"))
+    }
+
+    @Test
+    fun `a detailed sheet asks for the special to look unlike the basic attack`() = runTest {
+        // The whole point of a separate special row: a power that reads the same
+        // as an ordinary swing means the resource it cost bought nothing you can
+        // see. So the prompt has to distinguish the two rows, not just list them.
+        val model = FakeImageModel(Result.success(image(384, 448)))
+        val result = GenerateSpriteSheetUseCase(model)(
+            SpriteSheetRequest(subject = "a warrior", layout = SheetLayout.detailed()),
+        ).getOrThrow()
+
+        val prompt = model.lastRequest!!.prompt
+        assertTrue(prompt.contains("6 columns by 7 rows"))
+        assertTrue(prompt.contains("basic attack"))
+        assertTrue(
+            prompt.contains("signature power"),
+            "the special row stopped being described apart from the basic attack",
+        )
+        assertTrue(result.sheet.clips.any { it.state == AnimationState.SPECIAL })
     }
 
     @Test

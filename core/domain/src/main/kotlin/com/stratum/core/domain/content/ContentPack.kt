@@ -3,6 +3,7 @@ package com.stratum.core.domain.content
 import com.stratum.core.domain.actor.EnemyDefinition
 import com.stratum.core.domain.actor.SkillDefinition
 import com.stratum.core.domain.combat.CombatStats
+import com.stratum.core.domain.world.TerrainRecipe
 import com.stratum.core.domain.combat.DamageTypeDefinition
 import com.stratum.core.domain.item.AffixDefinition
 import com.stratum.core.domain.item.InsertDefinition
@@ -38,6 +39,12 @@ data class ContentPack(
     val damageTypes: List<DamageTypeDefinition> = emptyList(),
     val affixes: List<AffixDefinition> = emptyList(),
     val inserts: List<InsertDefinition> = emptyList(),
+    /**
+     * How this pack shapes its world. Null leaves whatever an earlier pack set,
+     * so a pack that only adds monsters does not flatten somebody else's
+     * landscape by saying nothing.
+     */
+    val terrain: TerrainRecipe? = null,
     val weapons: List<WeaponBase> = emptyList(),
     val enemies: List<EnemyDefinition> = emptyList(),
     val skills: List<SkillDefinition> = emptyList(),
@@ -103,6 +110,14 @@ data class ScatterRule(
     val chance: Float,
     /** Stacked height, so a 4 makes a tree trunk rather than a shrub. */
     val height: Int = 1,
+    /**
+     * Placed on top of the stack instead of one more [blockId].
+     *
+     * This is what makes a tree a tree: three trunk blocks and a canopy, rather
+     * than a four-block pillar of bark that the renderer has no way to tell
+     * apart from a post.
+     */
+    val capBlockId: String? = null,
 )
 
 data class DepositRule(

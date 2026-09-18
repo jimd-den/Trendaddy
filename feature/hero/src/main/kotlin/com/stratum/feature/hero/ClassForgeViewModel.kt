@@ -6,6 +6,7 @@ import com.stratum.core.domain.content.AssembledContent
 import com.stratum.core.domain.content.ClassDraft
 import com.stratum.core.domain.content.ClassOptions
 import com.stratum.core.domain.content.HeroClassDefinition
+import com.stratum.core.domain.sprite.SpriteSheet
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,6 +24,11 @@ class ClassForgeViewModel(
     private val saveClass: (HeroClassDefinition) -> Unit,
     private val deleteClass: (String) -> Unit,
     private val loadClasses: () -> List<HeroClassDefinition>,
+    /**
+     * Sheets drawn in the sprite forge. Loaded through a lambda rather than
+     * held, so art generated after this screen opened still appears.
+     */
+    private val loadSheets: () -> List<SpriteSheet> = { emptyList() },
 ) : ViewModel() {
 
     private val options = ClassOptions.from(content)
@@ -35,6 +41,7 @@ class ClassForgeViewModel(
             weapons = content.weapons,
             // Air and bedrock are not things a class can carry a stack of.
             blocks = content.registry.all.filter { !it.isAir && it.isBreakable },
+            sheets = heroSheets(),
             saved = loadClasses(),
         ),
     )
@@ -58,6 +65,15 @@ class ClassForgeViewModel(
         it.withAttribute(attribute, current + delta)
     }
 
+    /**
+     * Picks the art this class is drawn with. Tapping the chosen one again
+     * clears it, which falls the class back to the shape renderer — a real
+     * choice, not a missing one.
+     */
+    fun selectSprite(sheetId: String) = edit {
+        it.copy(spriteSetId = if (it.spriteSetId == sheetId) null else sheetId)
+    }
+
     fun toggleSkill(skillId: String) = edit { it.toggling(skillId) }
     fun toggleBlock(blockId: String) = edit { it.togglingBlock(blockId) }
     fun selectWeapon(weaponId: String) = edit {
@@ -74,6 +90,20 @@ class ClassForgeViewModel(
     fun reset() {
         _state.value = _state.value.copy(draft = ClassDraft(), message = null)
     }
+
+    /** Re-reads the sheets, for art generated while this screen was open. */
+    fun refreshSheets() {
+        _state.value = _state.value.copy(sheets = heroSheets())
+    }
+
+    /**
+     * Only hero art. A monster sheet is laid out differently and would read as
+     * a broken character rather than as the wrong choice.
+     */
+    private fun heroSheets(): List<SpriteSheet> =
+        (content.spriteSheets + loadSheets())
+            .distinctBy { it.id }
+            .filter { it.id.startsWith(HERO_NAMESPACE) }
 
     fun save() {
         val draft = _state.value.draft
@@ -101,11 +131,15 @@ class ClassForgeViewModel(
             saveClass: (HeroClassDefinition) -> Unit,
             deleteClass: (String) -> Unit,
             loadClasses: () -> List<HeroClassDefinition>,
+            loadSheets: () -> List<SpriteSheet> = { emptyList() },
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                ClassForgeViewModel(content, saveClass, deleteClass, loadClasses) as T
+                ClassForgeViewModel(content, saveClass, deleteClass, loadClasses, loadSheets) as T
         }
+
+        /** Sheets the sprite forge files under "hero:". */
+        const val HERO_NAMESPACE = "hero:"
     }
 }
 
@@ -116,6 +150,7 @@ data class ClassForgeUiState(
     val skills: List<com.stratum.core.domain.actor.SkillDefinition>,
     val weapons: List<com.stratum.core.domain.item.WeaponBase>,
     val blocks: List<com.stratum.core.domain.world.BlockType>,
+    val sheets: List<SpriteSheet> = emptyList(),
     val saved: List<HeroClassDefinition> = emptyList(),
     val message: String? = null,
 ) {

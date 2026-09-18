@@ -100,7 +100,7 @@ fun AnvilOverlay(
 
             Spacer(Modifier.height(Space.medium))
             Text(
-                text = item.name,
+                text = "${item.glyph} ${item.name}",
                 style = MaterialTheme.typography.titleSmall,
                 color = Color(state.rarityColor(item)),
             )
@@ -145,7 +145,7 @@ private fun AnvilItemPicker(
     ) {
         items(items, key = ItemInstance::instanceId) { candidate ->
             StratumChip(
-                label = "${candidate.name} ${candidate.sockets.used}/${candidate.socketCount}",
+                label = "${candidate.glyph} ${candidate.name} ${candidate.sockets.used}/${candidate.socketCount}",
                 selected = candidate.instanceId == selected.instanceId,
                 onClick = { onSelectItem(candidate.instanceId) },
                 swatch = Color(state.rarityColor(candidate)),
@@ -226,7 +226,7 @@ private fun PouchRow(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 StratumChip(
-                    label = "${entry.definition.name} ×${entry.count}",
+                    label = "${entry.definition.glyph} ${entry.definition.name} ×${entry.count}",
                     selected = false,
                     onClick = { if (canSlot) onSlot(entry.definition.id) },
                     swatch = Color(entry.definition.color),

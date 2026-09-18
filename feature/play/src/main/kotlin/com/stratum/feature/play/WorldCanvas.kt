@@ -11,6 +11,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.ImageBitmap
@@ -52,6 +53,8 @@ fun WorldCanvas(
     groundInserts: List<GroundInsert> = emptyList(),
     /** Resolves a dropped insert's colour; nulls fall back to a neutral tint. */
     insertColor: (String) -> Long? = { null },
+    /** Resolves a dropped insert's glyph, so a rune on the ground reads as one. */
+    insertGlyph: (String) -> String? = { null },
     feedback: List<FeedbackMark> = emptyList(),
     /** 0..1, how recently the player was hit. Drives the hurt tint. */
     playerFlash: Float = 0f,
@@ -59,6 +62,8 @@ fun WorldCanvas(
     isRolling: Boolean = false,
     isInvulnerable: Boolean = false,
     flashFor: (String) -> Float = { 0f },
+    /** How hard an actor is being knocked back, 0..1. Drives the recoil. */
+    impactFor: (String) -> Float = { 0f },
     /**
      * Supplies the drawn sheet for an actor, or null to fall back to shapes.
      * Every actor without art still renders, which is what lets sprites arrive
@@ -129,6 +134,11 @@ fun WorldCanvas(
         val originX = size.width / 2f - projection.project(camera).x
         val originY = size.height / 2f - projection.project(camera).y
 
+        // Ground at the player's own height is fully lit; everything lower is
+        // shaded towards it, so depth reads relative to where you are standing
+        // rather than to an absolute sea level you cannot see.
+        val eyeLevel = kotlin.math.floor(camera.z).toInt()
+
         val range = projection.visibleRange(size.width, size.height, originX, originY)
 
         // Allocated once and rewound per block. A path per face per block per
@@ -154,24 +164,75 @@ fun WorldCanvas(
                 return@forEachColumnInDrawOrder
             }
 
+            // Props stand on the ground but are not the ground. Shading and
+            // ledge shadows read the terrain beneath them, or a tree would make
+            // its own column look like a cliff.
+            var ground = surface
+            while (ground > 0 && world.blockAt(BlockPos(x, y, ground)).glyph != null) ground--
+
+            // How far below the player this column sits. Lower ground is drawn
+            // darker, which is the whole of "am I down a level" — without it an
+            // isometric field of one material reads as a flat UI background no
+            // matter how much geometry is in it.
+            val depthBelow = (eyeLevel - ground).coerceIn(0, DEPTH_SHADE_RANGE)
+            val depthShade = 1f - depthBelow.toFloat() / DEPTH_SHADE_RANGE * DEPTH_SHADE_STRENGTH
+
+            // A ledge casts onto the cell in front of it. Two heightmap lookups,
+            // and it is what turns a plateau edge into something you can see.
+            val shadowed = world.surfaceAt(x - 1, y) > ground || world.surfaceAt(x, y - 1) > ground
+
+            // Deterministic per-cell jitter. A large plain of one block is
+            // perfectly uniform otherwise, which reads as paper, not ground.
+            val grain = 1f + (((x * 73856093) xor (y * 19349663)) and 0xFF) / 255f * GRAIN - GRAIN / 2f
+
+            // The column's prop, if any: drawn once at the top of its run, so a
+            // four-block trunk is one tree rather than four stacked emoji.
+            var propGlyph: String? = null
+            var propScale = 1f
+            var propAt = 0
+
             for (z in floor..surface) {
                 val pos = BlockPos(x, y, z)
                 val block = world.blockAt(pos)
                 if (block.isAir) continue
+
+                val glyph = block.glyph
+                if (glyph != null) {
+                    propGlyph = glyph
+                    propScale = block.glyphScale
+                    propAt = z
+                    continue
+                }
+
                 // Fully buried blocks are invisible; skipping them is the single
                 // biggest saving in the draw loop.
-                if (z < surface && isEnclosed(world, pos)) continue
+                if (z < ground && isEnclosed(world, pos)) continue
 
+                val isTop = z == ground
+                val lit = depthShade * if (isTop) grain else 1f
                 val screen = projection.project(pos)
                 drawBlock(
                     centerX = originX + screen.x,
                     centerY = originY + screen.y,
                     projection = projection,
-                    topColor = Color(block.topColor),
-                    sideColor = Color(block.sideColor),
+                    topColor = Color(block.topColor).scaleRgb(lit),
+                    sideColor = Color(block.sideColor).scaleRgb(depthShade),
                     highlighted = pos == highlight,
                     accent = Color(block.accentColor),
                     faces = faces,
+                    shadowTop = isTop && shadowed,
+                )
+            }
+
+            propGlyph?.let { glyph ->
+                val screen = projection.project(BlockPos(x, y, propAt))
+                drawGlyph(
+                    x = originX + screen.x,
+                    y = originY + screen.y,
+                    projection = projection,
+                    glyph = glyph,
+                    scale = PROP_GLYPH_SCALE * propScale,
+                    shade = depthShade,
                 )
             }
         }
@@ -201,25 +262,44 @@ fun WorldCanvas(
             val x = originX + screen.x
             val y = originY + screen.y
             when (actor) {
-                is Actor.Loot -> drawLoot(x, y, projection, Color(actor.loot.item.rarity.beamColor()))
-                // Inserts get the same beam at half height: unmistakably loot,
-                // unmistakably not a weapon.
-                is Actor.Insert -> drawInsert(
-                    x, y, projection,
-                    Color(insertColor(actor.ground.insertId) ?: DEFAULT_INSERT_TINT),
-                )
+                // A beam in the rarity colour says "loot and how good"; the
+                // glyph on top says "and it is an axe". Neither alone answers
+                // both questions.
+                is Actor.Loot -> {
+                    drawLoot(x, y, projection, Color(actor.loot.item.rarity.beamColor()))
+                    drawGlyph(x, y, projection, actor.loot.item.glyph, LOOT_GLYPH_SCALE)
+                }
+                is Actor.Insert -> {
+                    drawInsert(
+                        x, y, projection,
+                        Color(insertColor(actor.ground.insertId) ?: DEFAULT_INSERT_TINT),
+                    )
+                    insertGlyph(actor.ground.insertId)?.let {
+                        drawGlyph(x, y, projection, it, LOOT_GLYPH_SCALE)
+                    }
+                }
                 is Actor.Monster -> {
+                    // A struck body dips and squashes for as long as it is
+                    // being shoved. Without it a hit is only a number, and a
+                    // heavy blow looks exactly like a glancing one.
+                    val recoil = impactFor(actor.enemy.instanceId)
+                    // Dipped into the blow while it is being shoved.
+                    val dip = recoil * RECOIL_DIP * projection.tileHeight * projection.zoom
                     val sprite = spriteFor(SpriteKey.Monster(actor.enemy.definitionId))
                     if (sprite != null) {
                         drawSprite(
-                            x, y, projection, sprite,
+                            x, y + dip, projection, sprite,
                             animationFor(actor.enemy.instanceId),
                             SpriteFacing.of(0, 1),
                             flashFor(actor.enemy.instanceId),
                         )
                         drawEnemyOverlay(x, y, projection, actor.enemy)
                     } else {
-                        drawEnemy(x, y, projection, actor.enemy, flashFor(actor.enemy.instanceId))
+                        drawEnemy(
+                            x, y + dip, projection, actor.enemy,
+                            flashFor(actor.enemy.instanceId),
+                            squash = 1f - recoil * RECOIL_SQUASH,
+                        )
                     }
                 }
                 is Actor.Player -> {
@@ -347,15 +427,34 @@ private fun DrawScope.drawSprite(
     val left = (x - drawWidth / 2f).toInt()
     val top = (y - drawHeight + projection.tileHeight * projection.zoom * 0.25f).toInt()
 
-    drawImage(
-        image = sprite.image,
-        srcOffset = IntOffset(rect.left, rect.top),
-        srcSize = IntSize(rect.width, rect.height),
-        dstOffset = IntOffset(left, top),
-        dstSize = IntSize(drawWidth.toInt(), drawHeight.toInt()),
-        filterQuality = FilterQuality.None,
-        alpha = 1f,
-    )
+    // A generated sheet reliably holds one facing, not four. Mirroring buys the
+    // other side for nothing and reads correctly at this camera angle, which is
+    // more dependable than asking a model for four consistent angles.
+    if (facing.mirrored) {
+        withTransform({
+            scale(scaleX = -1f, scaleY = 1f, pivot = Offset(x, top + drawHeight / 2f))
+        }) {
+            drawImage(
+                image = sprite.image,
+                srcOffset = IntOffset(rect.left, rect.top),
+                srcSize = IntSize(rect.width, rect.height),
+                dstOffset = IntOffset(left, top),
+                dstSize = IntSize(drawWidth.toInt(), drawHeight.toInt()),
+                filterQuality = FilterQuality.None,
+                alpha = 1f,
+            )
+        }
+    } else {
+        drawImage(
+            image = sprite.image,
+            srcOffset = IntOffset(rect.left, rect.top),
+            srcSize = IntSize(rect.width, rect.height),
+            dstOffset = IntOffset(left, top),
+            dstSize = IntSize(drawWidth.toInt(), drawHeight.toInt()),
+            filterQuality = FilterQuality.None,
+            alpha = 1f,
+        )
+    }
 
     if (flash > 0f) {
         drawImage(
@@ -407,6 +506,8 @@ private fun DrawScope.drawEnemy(
     projection: IsometricProjection,
     enemy: EnemyInstance,
     flash: Float = 0f,
+    /** Under 1 while the body is being knocked back, so a hit flattens it. */
+    squash: Float = 1f,
 ) {
     val scale = projection.tileWidth * projection.zoom
     val radius = scale * 0.16f * enemy.rank.sizeMultiplier()
@@ -426,11 +527,19 @@ private fun DrawScope.drawEnemy(
         blue = body.blue + (1f - body.blue) * flash,
         alpha = 1f,
     )
-    drawCircle(lit, radius * (1f + flash * HIT_SWELL), Offset(x, y - lift))
-    drawCircle(
-        Color.Black.copy(alpha = 0.5f),
-        radius,
-        Offset(x, y - lift),
+    val swollen = radius * (1f + flash * HIT_SWELL)
+    // Squashed vertically rather than scaled down: a body absorbing a blow
+    // widens as it compresses, which is what makes the hit look like weight
+    // rather than the monster simply getting smaller.
+    drawOval(
+        color = lit,
+        topLeft = Offset(x - swollen, y - lift - swollen * squash),
+        size = Size(swollen * 2f, swollen * 2f * squash),
+    )
+    drawOval(
+        color = Color.Black.copy(alpha = 0.5f),
+        topLeft = Offset(x - radius, y - lift - radius * squash),
+        size = Size(radius * 2f, radius * 2f * squash),
         style = Stroke(1.5f),
     )
 
@@ -567,6 +676,8 @@ private fun DrawScope.drawBlock(
     accent: Color,
     highlighted: Boolean,
     faces: BlockFaces,
+    /** True when a taller neighbour is casting onto this cell. */
+    shadowTop: Boolean = false,
 ) {
     val halfWidth = projection.tileWidth * projection.zoom / 2f
     val halfHeight = projection.tileHeight * projection.zoom / 2f
@@ -578,8 +689,21 @@ private fun DrawScope.drawBlock(
     drawPath(faces.right, sideColor.scaleRgb(RIGHT_FACE_SHADE))
     drawPath(faces.top, topColor)
 
+    if (shadowTop) {
+        drawPath(faces.top, LEDGE_SHADOW)
+    }
+
+    // A seam on every top face. Individually almost invisible; together they
+    // are what makes a field of tiles read as cells you could dig or build on
+    // rather than as one painted surface.
+    drawPath(faces.top, TILE_SEAM, style = Stroke(width = 1f))
+
     if (highlighted) {
-        drawPath(faces.top, accent.copy(alpha = 0.35f))
+        // A target you can actually find. The old wash was the same value as
+        // the terrain under it, so the cell you were about to act on was
+        // indistinguishable from the ones you were not.
+        drawPath(faces.top, TARGET_FILL)
+        drawPath(faces.top, TARGET_EDGE, style = Stroke(width = 4f))
         drawPath(faces.top, accent, style = Stroke(width = 2f))
     }
 }
@@ -639,14 +763,19 @@ private fun DrawScope.drawPlayer(
     invulnerable: Boolean = false,
 ) {
     val scale = projection.tileWidth * projection.zoom
-    val radius = scale * 0.22f
+    // Deliberately larger than any monster. In a field of coloured markers the
+    // one thing that must never be ambiguous is which one is you, and at the
+    // old size the player read as one more dot among the enemies.
+    val radius = scale * PLAYER_RADIUS
     val lift = projection.blockHeight * projection.zoom * 0.5f
     val center = Offset(x, y - lift)
 
+    // A tight, dark contact shadow: without one the player floats above the
+    // terrain instead of standing on it.
     drawOval(
-        color = Color.Black.copy(alpha = 0.4f),
-        topLeft = Offset(x - radius, y - radius * 0.5f),
-        size = Size(radius * 2f, radius),
+        color = Color.Black.copy(alpha = 0.55f),
+        topLeft = Offset(x - radius * 0.9f, y - radius * 0.45f),
+        size = Size(radius * 1.8f, radius * 0.9f),
     )
 
     drawCircle(accent.copy(alpha = 0.25f), radius * 1.5f, center)
@@ -665,7 +794,9 @@ private fun DrawScope.drawPlayer(
         topLeft = Offset(center.x - radius, center.y - radius * squash),
         size = Size(radius * 2f, radius * 2f * squash),
     )
-    drawCircle(PLAYER_EDGE, radius, center, style = Stroke(2.5f))
+    // A heavy outline is most of the silhouette: it holds the shape against
+    // both bright grass and dark stone without needing two palettes.
+    drawCircle(PLAYER_EDGE, radius, center, style = Stroke(4f))
 
     // An i-frame ring: the player needs to know the window is still open.
     if (invulnerable) {
@@ -747,6 +878,51 @@ private fun DrawScope.drawFeedback(
     }
 }
 
+/**
+ * An emoji standing on a cell, with a contact shadow.
+ *
+ * Emoji are colour fonts, so they cannot be tinted; depth is conveyed by the
+ * shadow and by a scrim behind the glyph instead, which keeps a prop on a dark
+ * lower terrace from looking like it is floating at the player's level.
+ */
+private fun DrawScope.drawGlyph(
+    x: Float,
+    y: Float,
+    projection: IsometricProjection,
+    glyph: String,
+    scale: Float,
+    shade: Float = 1f,
+) {
+    val tile = projection.tileWidth * projection.zoom
+    val size = tile * scale
+    val baseline = y + size * GLYPH_BASELINE
+
+    // Grounds the prop. Without it an emoji hangs in the air above the tile.
+    drawOval(
+        color = Color.Black.copy(alpha = 0.35f * shade),
+        topLeft = Offset(x - size * 0.3f, y - size * 0.1f),
+        size = Size(size * 0.6f, size * 0.26f),
+    )
+
+    drawContext.canvas.nativeCanvas.apply {
+        val paint = android.graphics.Paint().apply {
+            isAntiAlias = true
+            textAlign = android.graphics.Paint.Align.CENTER
+            textSize = size
+        }
+        // A scrim under the glyph so it reads on both bright grass and dark
+        // stone, and so depth shading still touches it.
+        paint.color = android.graphics.Color.argb(
+            ((1f - shade) * 130f).toInt().coerceIn(0, 255), 0, 0, 0,
+        )
+        paint.style = android.graphics.Paint.Style.FILL
+        drawText(glyph, x, baseline, paint)
+
+        paint.color = android.graphics.Color.WHITE
+        drawText(glyph, x, baseline, paint)
+    }
+}
+
 private fun Color.scaleRgb(factor: Float) = Color(
     red = (red * factor).coerceIn(0f, 1f),
     green = (green * factor).coerceIn(0f, 1f),
@@ -755,6 +931,14 @@ private fun Color.scaleRgb(factor: Float) = Color(
 )
 
 /** The south-west face reads as turned away from the light. */
+/** Levels below the player before depth shading bottoms out. */
+private const val DEPTH_SHADE_RANGE = 8
+/** How dark the deepest visible level goes. */
+private const val DEPTH_SHADE_STRENGTH = 0.45f
+/** Per-cell brightness jitter, so a large plain is not perfectly flat. */
+private const val GRAIN = 0.07f
+private val LEDGE_SHADOW = Color(0xFF000000).copy(alpha = 0.22f)
+private val TILE_SEAM = Color(0xFF000000).copy(alpha = 0.10f)
 private const val LEFT_FACE_SHADE = 0.72f
 private const val RIGHT_FACE_SHADE = 0.52f
 private const val VISIBLE_DEPTH = 6
@@ -765,6 +949,26 @@ private const val BASE_TEXT_FRACTION = 0.26f
 private const val SPREAD_BUCKETS = 5
 private const val SPREAD_FRACTION = 0.16f
 private const val SPRITE_SCALE = 1.35f
+/** Fraction of a tile width. Was 0.22; a player you cannot find is not a player. */
+private const val PLAYER_RADIUS = 0.34f
+/**
+ * Props are drawn at roughly two thirds of a tile.
+ *
+ * Full tile width was wrong: a prop that covers its own cell hides the terrain
+ * it is standing on, and a field of them reads as a texture rather than as
+ * objects placed on ground you could dig.
+ */
+private const val PROP_GLYPH_SCALE = 0.62f
+/** Sits the glyph's feet on the cell rather than centring it in the air. */
+private const val GLYPH_BASELINE = 0.18f
+/** Loot is smaller than scenery: bright and specific, not a landmark. */
+private const val LOOT_GLYPH_SCALE = 0.42f
+/** How far a struck body dips, as a fraction of a tile. */
+private const val RECOIL_DIP = 0.22f
+/** How much a struck body flattens at full force. */
+private const val RECOIL_SQUASH = 0.3f
+private val TARGET_FILL = Color(0xFFFFFFFF).copy(alpha = 0.18f)
+private val TARGET_EDGE = Color(0xFF14110E).copy(alpha = 0.85f)
 private val INVULNERABLE_RING = Color(0xFF7FD4E0)
 private val GHOST_OK = Color(0xFF8FB8DE)
 private val GHOST_SHORT = Color(0xFFD2544B)

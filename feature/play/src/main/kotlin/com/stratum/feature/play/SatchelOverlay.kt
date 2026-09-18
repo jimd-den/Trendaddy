@@ -130,7 +130,7 @@ private fun EquippedPanel(state: PlayUiState, equipped: ItemInstance?) {
     }
 
     Text(
-        text = equipped.name,
+        text = "${equipped.glyph} ${equipped.name}",
         style = MaterialTheme.typography.titleSmall,
         color = Color(state.rarityColor(equipped)),
     )
@@ -151,7 +151,7 @@ private fun EquippedPanel(state: PlayUiState, equipped: ItemInstance?) {
     }
     equipped.sockets.insertIds.mapNotNull(state::insertOrNull).forEach { insert ->
         Text(
-            text = "${insert.name} — ${insert.statLine}",
+            text = "${insert.glyph} ${insert.name} — ${insert.statLine}",
             style = MaterialTheme.typography.labelSmall,
             color = Color(insert.color),
         )
@@ -205,7 +205,7 @@ private fun BagList(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = item.name,
+                        text = "${item.glyph} ${item.name}",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color(state.rarityColor(item)),
                     )
@@ -283,7 +283,7 @@ private fun MaterialsRow(state: PlayUiState, world: World) {
         items(blocks, key = { it.key }) { (blockId, count) ->
             val type = world.registry.indexOrNull(blockId)?.let(world.registry::typeOf)
             StratumChip(
-                label = "${type?.displayName ?: blockId} $count",
+                label = "${type?.glyph?.let { "$it " }.orEmpty()}${type?.displayName ?: blockId} $count",
                 selected = false,
                 onClick = {},
                 swatch = type?.let { Color(it.topColor) },
@@ -291,7 +291,7 @@ private fun MaterialsRow(state: PlayUiState, world: World) {
         }
         items(state.heldInserts, key = { it.definition.id }) { held ->
             StratumChip(
-                label = "${held.definition.name} ×${held.count}",
+                label = "${held.definition.glyph} ${held.definition.name} ×${held.count}",
                 selected = false,
                 onClick = {},
                 swatch = Color(held.definition.color),

@@ -76,6 +76,23 @@ class SessionCombatTest {
     }
 
     @Test
+    fun `a charging monster stops at its reach instead of running through the player`() {
+        // A long frame used to carry a monster clean past the player and out the
+        // far side, which reads as the enemy losing interest mid-charge.
+        val session = session()
+        session.placeEnemy(health = 500, offsetX = 4f)
+
+        session.tick(10f)
+
+        val hunter = session.enemies.single { it.instanceId == "planted" }
+        val distance = hunter.position.horizontalDistanceTo(session.player.position)
+        assertTrue(
+            distance in 0.5f..1.5f,
+            "the monster ended up $distance away, having overshot its target",
+        )
+    }
+
+    @Test
     fun `a swing at empty air reports a miss and still costs recovery`() {
         val session = session()
         session.enemies = emptyList()

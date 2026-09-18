@@ -59,6 +59,45 @@ class BlockInteractionSystem(
         return BASE_MINE_SPEED * (1f + advantage * TIER_SPEED_BONUS)
     }
 
+    /**
+     * The air cell a tap on [picked] should fill.
+     *
+     * A tap always lands on a *solid* block — that is what the renderer drew and
+     * the only thing the picker can find. You never place into a block, you
+     * place against the face you touched, so the cell has to be resolved before
+     * a placement is even attempted. Without this every placement is rejected as
+     * occupied, which reads as "building does nothing" while a mining loop
+     * started by the same gesture quietly eats the world.
+     *
+     * Order: the top face first, because in this projection it is most of what
+     * is visible; then the horizontal neighbour nearest [from], so building
+     * towards yourself works; then the top of that neighbour, which is what
+     * makes tapping the ground you are standing on raise a step beside you
+     * instead of failing; then underneath.
+     */
+    fun placementCellFor(
+        picked: BlockPos,
+        from: BlockPos,
+        /** Cells something is standing in. Skipped rather than offered and refused. */
+        blocked: Set<BlockPos> = emptySet(),
+    ): BlockPos? {
+        val sides = Direction.entries
+            .map { picked.offset(it) }
+            .filter { it.z == picked.z }
+            .sortedBy { it.horizontalDistanceTo(from) }
+
+        val candidates = listOf(picked.above()) +
+            sides +
+            sides.map { it.above() } +
+            listOf(picked.below())
+        return candidates.firstOrNull { candidate ->
+            candidate.z in 0 until Chunk.HEIGHT &&
+                candidate !in blocked &&
+                world.isLoaded(candidate.chunkPos) &&
+                world.blockAt(candidate).isAir
+        }
+    }
+
     fun place(request: PlaceRequest): PlaceResult {
         val index = world.registry.indexOrNull(request.blockId)
             ?: return PlaceResult.Rejected(PlaceRejection.UNKNOWN_BLOCK)

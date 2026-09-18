@@ -4,7 +4,10 @@ import android.util.Base64
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.stratum.core.domain.ai.GeneratedImage
+import com.stratum.core.domain.ai.GenerationAttempt
 import com.stratum.core.domain.ai.GenerationException
+import com.stratum.core.domain.ai.GenerationObserver
+import com.stratum.core.domain.ai.GenerationStage
 import com.stratum.core.domain.ai.ImageModelPort
 import com.stratum.core.domain.ai.ImageRequest
 import kotlinx.coroutines.Dispatchers
@@ -30,29 +33,47 @@ class OpenRouterImageModel(
     private val moshi: Moshi = Moshi.Builder().build(),
 ) : ImageModelPort {
 
-    override suspend fun generateImage(request: ImageRequest): Result<GeneratedImage> =
+    override suspend fun generateImage(
+        request: ImageRequest,
+        observer: GenerationObserver,
+    ): Result<GeneratedImage> =
         withContext(Dispatchers.IO) {
+            observer.onStage(GenerationStage.PREPARING)
             val config = configProvider()
             if (config.apiKey.isBlank()) {
+                observer.onStage(GenerationStage.FAILED)
                 return@withContext Result.failure(
                     GenerationException("No API key is configured for ${config.displayName}"),
                 )
             }
 
-            runCatching {
-                val model = request.modelId ?: config.imageModel
-                val payload = moshi.adapter(ImageRequestDto::class.java).toJson(
-                    ImageRequestDto(
-                        model = model,
-                        prompt = request.prompt,
-                        n = 1,
-                        size = "${request.width}x${request.height}",
-                        response_format = "b64_json",
-                    ),
-                )
+            val model = request.modelId ?: config.imageModel
+            val endpoint = "${config.baseUrl.trimEnd('/')}/images/generations"
+            val payload = moshi.adapter(ImageRequestDto::class.java).toJson(
+                ImageRequestDto(
+                    model = model,
+                    prompt = request.prompt,
+                    n = 1,
+                    size = "${request.width}x${request.height}",
+                    response_format = "b64_json",
+                ),
+            )
+            // The key lives in a header and is never recorded. Everything else
+            // is, because a rejection is only explicable if you can see exactly
+            // what was asked for.
+            val headers = mapOf(
+                "Authorization" to "Bearer ****",
+                "Content-Type" to "application/json",
+                "HTTP-Referer" to config.refererUrl,
+                "X-Title" to config.appTitle,
+            )
+            var status: Int? = null
+            var responseBody: String? = null
+            val startedAt = System.currentTimeMillis()
 
+            val result = runCatching {
                 val httpRequest = Request.Builder()
-                    .url("${config.baseUrl.trimEnd('/')}/images/generations")
+                    .url(endpoint)
                     .addHeader("Authorization", "Bearer ${config.apiKey}")
                     .addHeader("Content-Type", "application/json")
                     .addHeader("HTTP-Referer", config.refererUrl)
@@ -60,23 +81,50 @@ class OpenRouterImageModel(
                     .post(payload.toRequestBody(JSON_MEDIA_TYPE))
                     .build()
 
+                observer.onStage(GenerationStage.SENDING)
                 client.newCall(httpRequest).execute().use { response ->
+                    observer.onStage(GenerationStage.READING)
+                    status = response.code
                     val body = response.body?.string().orEmpty()
+                    // Truncated: a successful reply is a megabyte of base64 and
+                    // nobody needs to read that, but a failure is short.
+                    responseBody = body.take(MAX_RECORDED_BODY)
                     if (!response.isSuccessful) {
                         throw GenerationException(describeFailure(response.code, body, model))
                     }
                     val parsed = moshi.adapter(ImageResponseDto::class.java).fromJson(body)
                     val first = parsed?.data?.firstOrNull()
-                        ?: throw GenerationException("The model returned no image")
+                        ?: throw GenerationException(
+                            "'${'$'}model' replied with no image. It is probably a text model.",
+                        )
 
+                    observer.onStage(GenerationStage.DECODING)
                     val bytes = when {
                         !first.b64_json.isNullOrBlank() -> decodeBase64(first.b64_json)
                         !first.url.isNullOrBlank() -> download(first.url)
                         else -> throw GenerationException("The model's reply contained no image data")
                     }
+                    observer.onStage(GenerationStage.MEASURING)
                     toGeneratedImage(bytes, request)
                 }
             }
+
+            observer.onAttempt(
+                GenerationAttempt(
+                    id = "img_${'$'}startedAt",
+                    label = "Image · ${'$'}{request.width}×${'$'}{request.height}",
+                    endpoint = endpoint,
+                    model = model,
+                    requestBody = payload,
+                    redactedHeaders = headers,
+                    status = status,
+                    responseBody = responseBody,
+                    failure = result.exceptionOrNull()?.message,
+                    durationMillis = System.currentTimeMillis() - startedAt,
+                ),
+            )
+            observer.onStage(if (result.isSuccess) GenerationStage.DONE else GenerationStage.FAILED)
+            result
         }
 
     private fun decodeBase64(encoded: String): ByteArray {
@@ -126,6 +174,8 @@ class OpenRouterImageModel(
     }
 
     private companion object {
+        /** Enough to read an error; far less than a base64 image. */
+        const val MAX_RECORDED_BODY = 4000
         val JSON_MEDIA_TYPE = "application/json".toMediaType()
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()

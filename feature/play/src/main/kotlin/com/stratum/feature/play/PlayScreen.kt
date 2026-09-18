@@ -133,11 +133,13 @@ fun PlayScreenContent(
                 groundLoot = state.groundLoot,
                 groundInserts = state.groundInserts,
                 insertColor = { state.insertOrNull(it)?.color },
+                insertGlyph = { state.insertOrNull(it)?.glyph },
                 feedback = state.feedback,
                 playerFlash = state.playerFlash,
                 isRolling = state.isRolling,
                 isInvulnerable = state.isInvulnerable,
                 flashFor = state.flashFor,
+                impactFor = state.impactFor,
                 spriteFor = state.spriteFor,
                 playerAnimation = state.playerAnimation,
                 animationFor = state.animationFor,
@@ -317,19 +319,21 @@ private fun VitalsOverlay(
     // changes with the biome, and text over bare terrain stops being readable
     // the moment the player walks somewhere pale.
     StratumPanel(
-        modifier = modifier.width(200.dp),
+        modifier = modifier.width(176.dp),
         shape = Cut.small,
         contentPadding = androidx.compose.foundation.layout.PaddingValues(Space.small),
     ) {
+        // Glyphed, so the bars are readable before the words are. At a glance
+        // in a fight nobody reads "VITALITY"; they see a red bar with a heart.
         StratumMeter(
-            label = "Vitality",
+            label = "♥ Vitality",
             value = state.player.health,
             max = state.player.maxHealth,
             tint = colors.danger,
         )
-        Spacer(Modifier.height(Space.tight))
+        Spacer(Modifier.height(Space.hair))
         StratumMeter(
-            label = state.player.resourceName,
+            label = "✦ ${state.player.resourceName}",
             value = state.player.resource,
             max = state.player.maxResource,
             tint = colors.accentAlt,
@@ -392,7 +396,9 @@ private fun ControlBand(
     StratumPanel(
         modifier = modifier.fillMaxWidth(),
         shape = Cut.large,
-        contentPadding = safeBottomPadding(Space.large),
+        // Tighter than a settings panel. The band is a thumb rest, not a
+        // window, and every pixel it takes is a pixel of world you cannot see.
+        contentPadding = safeBottomPadding(Space.medium),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -406,12 +412,12 @@ private fun ControlBand(
                 } else {
                     "Tap to mine, hold to build"
                 },
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.labelSmall,
                 color = colors.inkMuted,
             )
         }
 
-        Spacer(Modifier.height(Space.medium))
+        Spacer(Modifier.height(Space.small))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -419,6 +425,7 @@ private fun ControlBand(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             StratumJoystick(
+                size = STICK_SIZE,
                 onDirection = { x, y ->
                     // Any stick movement cancels a dig: walking away from a
                     // block you were mining should not keep mining it.
@@ -429,11 +436,13 @@ private fun ControlBand(
 
             Column(horizontalAlignment = Alignment.End) {
                 Text(
-                    text = state.player.equippedWeapon?.name ?: "Bare hands",
+                    text = state.player.equippedWeapon
+                        ?.let { "${it.glyph} ${it.name}" }
+                        ?: "Bare hands",
                     style = MaterialTheme.typography.labelSmall,
                     color = colors.inkMuted,
                 )
-                Spacer(Modifier.height(Space.small))
+                Spacer(Modifier.height(Space.tight))
                 Row(horizontalArrangement = Arrangement.spacedBy(Space.small)) {
                     StratumAction(
                         label = if (state.rollCooldownFraction > 0f) "Roll…" else "Roll",
@@ -441,9 +450,12 @@ private fun ControlBand(
                         emphasis = ActionEmphasis.SECONDARY,
                         enabled = state.rollCooldownFraction <= 0f,
                     )
+                    // One primary action, and it is whichever one the current
+                    // mode means. Two equally weighted verbs side by side is a
+                    // desktop toolbar, not a thumb control.
                     StratumAction(
-                        label = "Strike",
-                        onClick = onAttack,
+                        label = if (state.buildMode) "Build" else "Strike",
+                        onClick = if (state.buildMode) onToggleBuild else onAttack,
                         emphasis = ActionEmphasis.DESTRUCTIVE,
                     )
                 }
@@ -457,10 +469,12 @@ private fun ControlBand(
             }
         }
 
-        Spacer(Modifier.height(Space.medium))
+        Spacer(Modifier.height(Space.small))
         StratumAction(
-            label = if (state.buildMode) "Building" else "Build",
+            label = if (state.buildMode) "Building — tap to stop" else "Build",
             onClick = onToggleBuild,
+            // Not QUIET: the mode toggle has to be findable, and at quiet
+            // weight it disappeared into the band entirely.
             emphasis = if (state.buildMode) ActionEmphasis.PRIMARY else ActionEmphasis.SECONDARY,
         )
         // Tools get their own row: five chips beside the toggle overflowed the
@@ -485,7 +499,7 @@ private fun ControlBand(
         // The skill bar is hidden while building: it is the wrong tool set, and
         // the band gets too tall on a phone with both.
         if (state.skills.isNotEmpty() && !state.buildMode) {
-            Spacer(Modifier.height(Space.medium))
+            Spacer(Modifier.height(Space.small))
             SkillBar(state = state, onCastSkill = onCastSkill)
         }
     }
@@ -549,8 +563,11 @@ private fun Hotbar(
     ) {
         itemsIndexed(state.player.hotbar) { index, blockId ->
             val type = world.registry.indexOrNull(blockId)?.let(world.registry::typeOf)
+            // The same glyph the block wears in the world, so what you are
+            // holding and what you are about to place are visibly one thing.
+            val mark = type?.glyph?.let { "$it " }.orEmpty()
             StratumChip(
-                label = "${type?.displayName ?: blockId} ${state.player.countOf(blockId)}",
+                label = "$mark${type?.displayName ?: blockId} ${state.player.countOf(blockId)}",
                 selected = index == state.player.selectedSlot,
                 onClick = { onSelectSlot(index) },
                 swatch = type?.let { Color(it.topColor) },
@@ -560,3 +577,5 @@ private fun Hotbar(
 }
 
 private const val ZOOM_STEP = 0.2f
+/** Down from 132dp: the stick was taking a fifth of the screen to say "north-east". */
+private val STICK_SIZE = 104.dp

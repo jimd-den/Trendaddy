@@ -36,6 +36,7 @@ import com.stratum.core.domain.actor.SkillDefinition
 import com.stratum.core.domain.content.ClassDraft
 import com.stratum.core.domain.content.HeroClassDefinition
 import com.stratum.core.domain.item.WeaponBase
+import com.stratum.core.domain.sprite.SpriteSheet
 import com.stratum.core.domain.world.BlockType
 import kotlin.math.roundToInt
 
@@ -56,6 +57,7 @@ fun ClassForgeScreen(
         onResourceName = viewModel::setResourceName,
         onAdjust = viewModel::adjust,
         onToggleSkill = viewModel::toggleSkill,
+        onSelectSprite = viewModel::selectSprite,
         onToggleBlock = viewModel::toggleBlock,
         onSelectWeapon = viewModel::selectWeapon,
         onSave = viewModel::save,
@@ -84,6 +86,7 @@ fun ClassForgeScreenContent(
     onResourceName: (String) -> Unit = {},
     onAdjust: (ClassDraft.Attribute, Int) -> Unit = { _, _ -> },
     onToggleSkill: (String) -> Unit = {},
+    onSelectSprite: (String) -> Unit = {},
     onToggleBlock: (String) -> Unit = {},
     onSelectWeapon: (String) -> Unit = {},
     onSave: () -> Unit = {},
@@ -229,6 +232,43 @@ fun ClassForgeScreenContent(
                         swatch = Color(skill.color),
                     )
                 }
+            }
+
+            // Art the sprite forge has drawn. Hidden when there is none rather
+            // than showing an empty shelf the player cannot fill from here.
+            if (state.sheets.isNotEmpty()) {
+                Spacer(Modifier.height(Space.medium))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SectionLabel("Appearance")
+                    Text(
+                        text = if (draft.spriteSetId == null) "Shapes" else "Drawn",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.inkMuted,
+                    )
+                }
+                Spacer(Modifier.height(Space.small))
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Space.small),
+                ) {
+                    items(state.sheets, key = SpriteSheet::id) { sheet ->
+                        StratumChip(
+                            label = sheet.name,
+                            selected = sheet.id == draft.spriteSetId,
+                            onClick = { onSelectSprite(sheet.id) },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(Space.tight))
+                Text(
+                    text = "Tap the chosen one again to go back to shapes.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.inkMuted,
+                )
             }
 
             Spacer(Modifier.height(Space.medium))

@@ -11,13 +11,45 @@ enum class AnimationState {
     IDLE,
     WALK,
     ATTACK,
+
+    /**
+     * A skill, as opposed to a basic swing. Separate because a class's power
+     * should not look like its ordinary attack — if the two read the same, the
+     * resource you spent bought nothing you can see.
+     */
+    SPECIAL,
     HURT,
     ROLL,
     DIE;
 
+    /**
+     * How long one frame of this state should hold.
+     *
+     * Lives on the state rather than in each layout so a sheet re-cut from what
+     * a model actually drew animates at the same speed as one cut as asked.
+     */
+    val defaultFrameDurationMs: Int
+        get() = when (this) {
+            IDLE -> 200
+            WALK -> 110
+            ATTACK -> 70
+            SPECIAL -> 80
+            HURT -> 90
+            ROLL -> 60
+            DIE -> 130
+        }
+
     companion object {
         /** States that play once and stop rather than looping. */
-        val oneShot = setOf(ATTACK, HURT, DIE)
+        val oneShot = setOf(ATTACK, SPECIAL, HURT, DIE)
+
+        /**
+         * The order rows are drawn in on a generated sheet, most useful first.
+         *
+         * A sheet with fewer rows than this simply stops early, which is why
+         * idle and walk come before the ones a character can do without.
+         */
+        val generatedRowOrder = listOf(IDLE, WALK, ATTACK, SPECIAL, HURT, ROLL, DIE)
     }
 }
 
@@ -27,6 +59,16 @@ enum class SpriteFacing {
     SOUTH_WEST,
     NORTH_WEST,
     NORTH_EAST;
+
+    /**
+     * Whether this facing should be drawn flipped.
+     *
+     * A generated sheet reliably contains one facing, not four. Mirroring buys
+     * the other side for nothing, and at a three-quarter camera a mirrored
+     * character reads correctly — which is cheaper and more dependable than
+     * asking a model for four consistent angles of the same figure.
+     */
+    val mirrored: Boolean get() = this == SOUTH_WEST || this == NORTH_WEST
 
     companion object {
         /**
@@ -130,10 +172,58 @@ data class SpriteSheet(
         return frame + row * columns
     }
 
+    /**
+     * The same sheet read on a different grid.
+     *
+     * Used when the image that came back is not laid out the way it was asked
+     * for. Clips are rebuilt from the rows that actually exist rather than
+     * carried over, because a clip pointing at a frame the new grid does not
+     * have would be cut from whatever happens to be there.
+     */
+    fun recut(grid: SheetGrid, imageWidth: Int, imageHeight: Int): SpriteSheet = copy(
+        columns = grid.columns,
+        rows = grid.rows,
+        frameWidth = (imageWidth / grid.columns).coerceAtLeast(1),
+        frameHeight = (imageHeight / grid.rows).coerceAtLeast(1),
+        clips = clipsForGrid(grid),
+        facingRows = emptyMap(),
+    )
+
     /** A sheet whose grid does not match its declared frames cannot be cut. */
     val isCoherent: Boolean
         get() = columns > 0 && rows > 0 && frameWidth > 0 && frameHeight > 0 &&
             clips.all { it.firstFrame + it.frameCount <= frameCount }
+}
+
+/**
+ * One clip per row, in the canonical order, for a grid we discovered rather
+ * than asked for.
+ *
+ * A single cell is a still: one idle frame that does not loop anywhere. That is
+ * the honest reading of a model that drew a picture instead of a sheet, and it
+ * is far better than pretending the picture has frames in it.
+ */
+fun clipsForGrid(grid: SheetGrid): List<AnimationClip> {
+    if (grid.columns <= 0 || grid.rows <= 0) return emptyList()
+    if (grid.cells == 1) {
+        return listOf(
+            AnimationClip(
+                state = AnimationState.IDLE,
+                firstFrame = 0,
+                frameCount = 1,
+                frameDurationMs = AnimationState.IDLE.defaultFrameDurationMs,
+            ),
+        )
+    }
+    return AnimationState.generatedRowOrder.take(grid.rows).mapIndexed { row, state ->
+        AnimationClip(
+            state = state,
+            firstFrame = row * grid.columns,
+            frameCount = grid.columns,
+            frameDurationMs = state.defaultFrameDurationMs,
+            loops = state !in AnimationState.oneShot,
+        )
+    }
 }
 
 enum class SpriteOrigin { PACK, AI_GENERATED, IMPORTED }
@@ -183,6 +273,7 @@ object AnimationSelector {
         isRolling: Boolean = false,
         wasHitRecently: Boolean = false,
         isAttacking: Boolean = false,
+        isCasting: Boolean = false,
         isMoving: Boolean = false,
     ): AnimationState = when {
         isDead -> AnimationState.DIE
@@ -190,6 +281,9 @@ object AnimationSelector {
         // Being hit interrupts an attack: the flinch is the more urgent
         // information, because it tells the player they are losing the trade.
         wasHitRecently -> AnimationState.HURT
+        // A skill outranks a swing: it costs something, so it should be the
+        // thing you see when both are in flight.
+        isCasting -> AnimationState.SPECIAL
         isAttacking -> AnimationState.ATTACK
         isMoving -> AnimationState.WALK
         else -> AnimationState.IDLE

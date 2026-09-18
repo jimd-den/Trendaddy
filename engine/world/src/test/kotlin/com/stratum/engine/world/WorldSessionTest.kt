@@ -147,10 +147,14 @@ class WorldSessionTest {
         assertNotNull(blockId)
         val before = session.player.countOf(blockId)
 
-        val target = airNeighbourWithAnchor(session)
+        // place() takes the block that was tapped, which is always solid, and
+        // resolves the empty cell beside it. Handing it an air cell was the old
+        // contract and the reason building never worked.
+        val picked = session.player.blockPos.below()
+        val target = session.placementPreviewFor(picked)
         assertNotNull(target, "no valid placement target next to the player")
 
-        val result = session.place(target)
+        val result = session.place(picked)
         assertIs<PlaceResult.Placed>(result)
         assertEquals(before - 1, session.player.countOf(blockId))
         assertEquals(blockId, session.world.blockAt(target).id)
@@ -259,21 +263,6 @@ class WorldSessionTest {
         return fallback
     }
 
-    private fun airNeighbourWithAnchor(session: WorldSession): BlockPos? {
-        val feet = session.player.blockPos
-        return listOf(
-            BlockPos(feet.x + 1, feet.y, feet.z),
-            BlockPos(feet.x - 1, feet.y, feet.z),
-            BlockPos(feet.x, feet.y + 1, feet.z),
-            BlockPos(feet.x, feet.y - 1, feet.z),
-        ).firstOrNull { candidate ->
-            candidate.z < Chunk.HEIGHT &&
-                session.world.blockAt(candidate).isAir &&
-                com.stratum.core.domain.world.Direction.entries.any {
-                    session.world.isSolid(candidate.offset(it))
-                }
-        }
-    }
 
     private fun mineToCompletion(session: WorldSession, target: BlockPos): MineResult {
         var result: MineResult = session.mine(target, 0.5f)

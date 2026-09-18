@@ -107,6 +107,8 @@ data class WeaponBase(
     /** Mining tier this weapon grants, so a pick is a weapon and a weapon is a pick. */
     val toolTier: Int = 1,
     val armour: Int = 0,
+    /** How this weapon reads at a glance, in the world and in the bag alike. */
+    val glyph: String = "⚔",
     val minItemLevel: Int = 1,
     val weight: Int = 100,
 )
@@ -135,6 +137,8 @@ data class ItemInstance(
     val baseArmour: Int,
     val affixes: List<AffixRoll> = emptyList(),
     val sockets: SocketSet = SocketSet.NONE,
+    /** Carried from the base so a drop on the ground looks like what it is. */
+    val glyph: String = "⚔",
 ) {
     val averageDamage: Int get() = (minDamage + maxDamage) / 2
 

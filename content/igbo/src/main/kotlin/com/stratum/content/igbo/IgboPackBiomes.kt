@@ -38,8 +38,8 @@ internal object IgboPackBiomes {
         heightBias = 1,
         roughness = 0.7f,
         scatter = listOf(
-            ScatterRule(IgboPackBlocks.irokoTrunk.id, chance = 0.055f, height = 4),
-            ScatterRule(IgboPackBlocks.palmReed.id, chance = 0.09f, height = 1),
+            ScatterRule(IgboPackBlocks.irokoCanopy.id, chance = 0.055f, height = 1),
+            ScatterRule(IgboPackBlocks.palmReed.id, chance = 0.05f, height = 1),
         ),
         deposits = listOf(bronzeVein, ironVein),
         ambientLight = 11,
@@ -104,8 +104,8 @@ internal object IgboPackBiomes {
         heightBias = -2,
         roughness = 0.2f,
         scatter = listOf(
-            ScatterRule(IgboPackBlocks.palmReed.id, chance = 0.14f, height = 1),
-            ScatterRule(IgboPackBlocks.irokoTrunk.id, chance = 0.02f, height = 3),
+            ScatterRule(IgboPackBlocks.palmReed.id, chance = 0.05f, height = 1),
+            ScatterRule(IgboPackBlocks.irokoCanopy.id, chance = 0.02f, height = 1),
         ),
         deposits = listOf(ironVein.copy(chance = 0.18f)),
         ambientLight = 9,

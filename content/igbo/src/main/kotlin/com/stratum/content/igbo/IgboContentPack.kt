@@ -2,6 +2,9 @@ package com.stratum.content.igbo
 
 import com.stratum.core.domain.combat.CombatStats
 import com.stratum.core.domain.content.ContentPack
+import com.stratum.core.domain.world.NoiseLayer
+import com.stratum.core.domain.world.Stratum
+import com.stratum.core.domain.world.TerrainRecipe
 import com.stratum.core.domain.content.HeroClassDefinition
 import com.stratum.core.domain.content.LoreCategory
 import com.stratum.core.domain.content.LoreEntry
@@ -197,6 +200,29 @@ object IgboContentPack {
         ),
     )
 
+    /**
+     * How this pack shapes its world.
+     *
+     * Terraced on purpose. Smooth noise gives a landscape of one-block steps
+     * that reads as texture rather than terrain: you cannot tell which level you
+     * are on, cannot see where you can climb, and cannot put a building on it.
+     * Snapping to three-block plateaus gives ledges you can read at a glance and
+     * ground flat enough to build on.
+     */
+    val terrain = TerrainRecipe(
+        elevation = listOf(
+            // One broad landform, so a region has a shape rather than a texture.
+            NoiseLayer(scale = 0.010f, amplitude = 1f),
+            // A quieter second octave, enough to break up the plateau edges.
+            NoiseLayer(scale = 0.045f, amplitude = 0.3f, seedOffset = 101),
+        ),
+        terraceStep = 3,
+        strata = listOf(
+            Stratum(IgboPackBlocks.redEarth.id, thickness = 2),
+            Stratum(IgboPackBlocks.riverClay.id, thickness = 2),
+        ),
+    )
+
     val pack = ContentPack(
         id = ID,
         name = "Igbo-Ukwu Bronze",
@@ -217,5 +243,6 @@ object IgboContentPack {
         enemies = IgboPackCombat.enemies,
         skills = IgboPackCombat.skills,
         rarityStyles = IgboPackCombat.rarityStyles,
+        terrain = terrain,
     )
 }

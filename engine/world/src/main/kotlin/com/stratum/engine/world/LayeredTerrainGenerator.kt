@@ -5,7 +5,12 @@ import com.stratum.core.domain.world.BlockRegistry
 import com.stratum.core.domain.world.BlockType
 import com.stratum.core.domain.world.Chunk
 import com.stratum.core.domain.world.ChunkPos
+import com.stratum.core.domain.world.BiomeSource
+import com.stratum.core.domain.world.TerrainContext
 import com.stratum.core.domain.world.TerrainGenerator
+import com.stratum.core.domain.world.TerrainGeneratorFactory
+import com.stratum.core.domain.world.TerrainGeneratorRegistry
+import com.stratum.core.domain.world.TerrainRecipe
 import com.stratum.core.domain.world.WorldConfig
 
 /**
@@ -19,11 +24,16 @@ import com.stratum.core.domain.world.WorldConfig
 class LayeredTerrainGenerator(
     private val config: WorldConfig,
     private val biomes: List<BiomeDefinition>,
-) : TerrainGenerator {
+    /** The shape of the landscape, as data. See [TerrainRecipe]. */
+    private val recipe: TerrainRecipe = TerrainRecipe(),
+) : TerrainGenerator, BiomeSource {
 
     init {
         require(biomes.isNotEmpty()) { "Terrain generation needs at least one biome" }
     }
+
+    /** One noise field per elevation octave, offset so they do not line up. */
+    private val elevationNoise = recipe.elevation.map { ValueNoise(config.seed + it.seedOffset) }
 
     private val heightNoise = ValueNoise(config.seed)
     private val biomeNoise = ValueNoise(config.seed * 31 + 7)
@@ -54,7 +64,7 @@ class LayeredTerrainGenerator(
      * Biomes are chosen by a low-frequency noise field so regions are large and
      * contiguous rather than a per-column lottery.
      */
-    fun biomeAt(worldX: Int, worldY: Int): BiomeDefinition {
+    override fun biomeAt(worldX: Int, worldY: Int): BiomeDefinition {
         if (biomes.size == 1) return biomes.first()
         val sample = biomeNoise.fractal(worldX * BIOME_SCALE, worldY * BIOME_SCALE, octaves = 2)
         val index = (sample * biomes.size).toInt().coerceIn(0, biomes.size - 1)
@@ -62,14 +72,39 @@ class LayeredTerrainGenerator(
     }
 
     fun surfaceHeight(worldX: Int, worldY: Int, biome: BiomeDefinition): Int {
-        val sample = heightNoise.fractal(worldX * TERRAIN_SCALE, worldY * TERRAIN_SCALE, octaves = 4)
-        // Summing octaves concentrates samples around the midpoint, so the raw
-        // value only ever spends a fraction of the height budget and the world
-        // comes out looking like a plain. Stretch it back out before use.
-        val signed = (((sample - 0.5f) * 2f) * TERRAIN_GAIN).coerceIn(-1f, 1f)
+        val signed = elevationAt(worldX, worldY)
         val variation = config.surfaceVariation * biome.roughness
         val raw = config.seaLevel + biome.heightBias + (signed * variation).toInt()
-        return raw.coerceIn(2, Chunk.HEIGHT - TOP_MARGIN)
+
+        // Terraced before clamping, so the plateaus stay aligned across biomes
+        // with different height biases: a ledge that steps by two in one region
+        // and by one in the next reads as a bug rather than as a landscape.
+        val terraced = recipe.terraced(raw)
+        return terraced.coerceIn(2, Chunk.HEIGHT - TOP_MARGIN)
+    }
+
+    /**
+     * Summed elevation octaves in -1..1.
+     *
+     * An empty recipe is a flat world, which is a legitimate thing to ask for
+     * rather than a misconfiguration.
+     */
+    private fun elevationAt(worldX: Int, worldY: Int): Float {
+        if (recipe.elevation.isEmpty()) return 0f
+
+        var total = 0f
+        var weight = 0f
+        recipe.elevation.forEachIndexed { index, layer ->
+            val noise = elevationNoise[index]
+            val sample = noise.fractal(worldX * layer.scale, worldY * layer.scale, octaves = 2)
+            // Octaves sum around their midpoint, so a raw sample only ever
+            // spends a fraction of the height budget and the world comes out a
+            // plain. Re-centre and stretch before weighting.
+            total += ((sample - 0.5f) * 2f) * layer.amplitude
+            weight += layer.amplitude
+        }
+        if (weight <= 0f) return 0f
+        return (total / weight * TERRAIN_GAIN).coerceIn(-1f, 1f)
     }
 
     private fun fillColumn(
@@ -83,12 +118,33 @@ class LayeredTerrainGenerator(
         biome: BiomeDefinition,
     ) {
         val filler = registry.indexOf(biome.bedrockFillerBlockId)
-        val subsurface = registry.indexOf(biome.subsurfaceBlockId)
         val surface = registry.indexOf(biome.surfaceBlockId)
 
+        if (recipe.strata.isEmpty()) {
+            val subsurface = registry.indexOf(biome.subsurfaceBlockId)
+            for (z in 1 until surfaceZ) {
+                val index = if (z >= surfaceZ - SUBSURFACE_DEPTH) subsurface else filler
+                chunk.setBlock(localX, localY, z, index)
+            }
+            chunk.setBlock(localX, localY, surfaceZ, surface)
+            return
+        }
+
+        // Recipe strata run top down from just under the surface. Anything the
+        // bands do not reach is filler, so a short recipe still makes a solid
+        // world rather than a hollow one.
         for (z in 1 until surfaceZ) {
-            val index = if (z >= surfaceZ - SUBSURFACE_DEPTH) subsurface else filler
-            chunk.setBlock(localX, localY, z, index)
+            chunk.setBlock(localX, localY, z, filler)
+        }
+        var z = surfaceZ - 1
+        recipe.strata.forEach { stratum ->
+            val index = registry.indexOrNull(stratum.blockId) ?: return@forEach
+            repeat(stratum.thickness) {
+                if (z >= 1) {
+                    chunk.setBlock(localX, localY, z, index)
+                    z--
+                }
+            }
         }
         chunk.setBlock(localX, localY, surfaceZ, surface)
     }
@@ -164,10 +220,12 @@ class LayeredTerrainGenerator(
             val roll = PositionalRandom.floatAt(config.seed, worldX, worldY, SCATTER_SALT + ruleIndex)
             if (roll >= rule.chance) return@forEachIndexed
             val index = registry.indexOf(rule.blockId)
+            val cap = rule.capBlockId?.let(registry::indexOrNull)
             for (offset in 1..rule.height) {
                 val z = surfaceZ + offset
                 if (z >= Chunk.HEIGHT) break
-                chunk.setBlock(localX, localY, z, index)
+                val isTop = offset == rule.height
+                chunk.setBlock(localX, localY, z, if (isTop && cap != null) cap else index)
             }
         }
     }
@@ -192,4 +250,28 @@ class LayeredTerrainGenerator(
         const val DEPOSIT_SALT = 1000
         const val SCATTER_SALT = 2000
     }
+}
+
+/**
+ * The generators this build ships with.
+ *
+ * A new algorithm needs nothing from the engine but an id and a factory:
+ *
+ * ```
+ * StratumTerrain.registry.register("mypack:caves") { ctx -> MyCaveGenerator(ctx) }
+ * ```
+ *
+ * A pack then names `mypack:caves` in its recipe and gets it.
+ */
+object StratumTerrain {
+
+    /** Shared, so registering once makes a generator available to every session. */
+    val registry: TerrainGeneratorRegistry = TerrainGeneratorRegistry().register(
+        TerrainRecipe.LAYERED,
+        TerrainGeneratorFactory { context ->
+            LayeredTerrainGenerator(context.config, context.biomes, context.recipe)
+        },
+    )
+
+    fun create(context: TerrainContext): TerrainGenerator = registry.create(context)
 }

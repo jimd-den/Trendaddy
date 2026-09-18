@@ -17,6 +17,9 @@ import com.stratum.core.domain.world.BlockPos
 import com.stratum.core.domain.world.Chunk
 import com.stratum.core.domain.world.Direction
 import com.stratum.core.domain.world.World
+import com.stratum.core.domain.world.BiomeSource
+import com.stratum.core.domain.world.TerrainContext
+import com.stratum.core.domain.world.TerrainGenerator
 import com.stratum.core.domain.world.WorldConfig
 import com.stratum.core.domain.world.WorldPoint
 import kotlin.math.abs
@@ -36,8 +39,24 @@ class WorldSession(
     val content: AssembledContent,
     val config: WorldConfig,
     heroClassId: String? = null,
+    /**
+     * The algorithm that builds the terrain. Null resolves the one the loaded
+     * packs asked for, which is what makes world generation swappable without
+     * touching the session: pass your own here, or register a factory and name
+     * it in a pack's recipe.
+     */
+    terrainGenerator: TerrainGenerator? = null,
 ) {
-    private val generator = LayeredTerrainGenerator(config, content.biomes)
+    private val generator: TerrainGenerator = terrainGenerator ?: StratumTerrain.create(
+        TerrainContext(config, content.biomes, content.terrain),
+    )
+
+    /**
+     * Only generators that claim to know about biomes are asked. One that does
+     * not — a dungeon builder, a flat sandbox — leaves the region unnamed rather
+     * than being forced to invent one.
+     */
+    private val biomeSource: BiomeSource? = generator as? BiomeSource
     private val streamingWorld = StreamingWorld(content.registry, generator, config)
     private val interaction = BlockInteractionSystem(streamingWorld)
 
@@ -52,6 +71,12 @@ class WorldSession(
     private val feedbackLog = FeedbackLog()
     private val hitFlashes = HitFlashes()
 
+    /** Knockback, so a hit moves the thing it lands on. */
+    private val impacts = ImpactField(streamingWorld)
+
+    /** How hard an actor is currently being shoved, 0..1, for the renderer. */
+    fun impactFor(actorId: String): Float = impacts.intensity(actorId)
+
     /** Short-lived visuals: damage numbers, misses, level-ups. */
     val feedback: List<FeedbackMark> get() = feedbackLog.active
 
@@ -64,6 +89,13 @@ class WorldSession(
 
     /** Seconds left of an actor's attack animation, so a swing is not instant. */
     private val attackHolds = HashMap<String, Float>()
+
+    /**
+     * Seconds left of a *skill* animation. Kept apart from [attackHolds] so a
+     * power does not look like an ordinary swing — if the two read the same,
+     * the resource you spent bought nothing you can see.
+     */
+    private val castHolds = HashMap<String, Float>()
 
     fun animationFor(actorId: String): AnimationPlayback =
         playbacks[actorId] ?: AnimationPlayback()
@@ -146,172 +178,38 @@ class WorldSession(
 
     // ---- movement --------------------------------------------------------
 
-    /**
-     * The direction the player is being pushed, from the joystick. Length 0..1,
-     * so a half-deflected stick walks at half speed.
-     *
-     * Held as intent rather than applied immediately: movement is integrated in
-     * [tick] so that speed is measured in blocks per second and does not depend
-     * on how often the UI happens to call in.
-     */
-    private var moveInput: WorldPoint = WorldPoint.ZERO
+    /** Stick intent, the dodge roll, collision and gravity. See [PlayerMotion]. */
+    private val motion = PlayerMotion(streamingWorld)
 
-    /** Seconds left of the current dodge roll, and the direction it is going. */
-    private var rollRemaining: Float = 0f
-    private var rollDirection: WorldPoint = WorldPoint.ZERO
+    val isRolling: Boolean get() = motion.isRolling
 
-    /** Seconds left of invulnerability. Longer than nothing, shorter than the roll. */
-    private var invulnerableFor: Float = 0f
+    val isInvulnerable: Boolean get() = motion.isInvulnerable
 
-    /** Seconds until another roll is allowed. */
-    private var rollCooldown: Float = 0f
+    val rollCooldownFraction: Float get() = motion.rollCooldownFraction
 
-    val isRolling: Boolean get() = rollRemaining > 0f
-
-    val isInvulnerable: Boolean get() = invulnerableFor > 0f
-
-    val rollCooldownFraction: Float
-        get() = (rollCooldown / ROLL_COOLDOWN).coerceIn(0f, 1f)
-
-    /**
-     * Sets the direction the player wants to go, as a vector from the joystick.
-     * Zero stops them.
-     */
+    /** Sets the direction the player wants to go. Zero stops them. */
     fun setMoveInput(dx: Float, dy: Float) {
-        val length = sqrt(dx * dx + dy * dy)
-        moveInput = if (length <= INPUT_DEADZONE) {
-            WorldPoint.ZERO
-        } else {
-            // Clamp to the unit circle so a diagonal is not faster than a
-            // cardinal, which is the classic bug with square joystick input.
-            val scale = (if (length > 1f) 1f / length else 1f)
-            WorldPoint(dx * scale, dy * scale, 0f)
-        }
-        if (moveInput != WorldPoint.ZERO) {
-            player = player.copy(facing = facingFor(moveInput.x, moveInput.y))
-        }
+        motion.aim(dx, dy)?.let { player = player.copy(facing = it) }
     }
 
-    /**
-     * Starts a dodge roll: a burst of speed in the current direction with a
-     * window of invulnerability.
-     *
-     * Rolls in the facing direction when the stick is neutral, so a dodge is
-     * always available rather than requiring the player to be already moving.
-     */
-    fun dodge(): DodgeResult {
-        // Most specific reason first: a roll always sets the cooldown, so
-        // checking cooldown first would report every mid-roll press as
-        // "on cooldown" and hide what is actually happening.
-        if (!player.isAlive) return DodgeResult.Rejected
-        if (isRolling) return DodgeResult.AlreadyRolling
-        if (rollCooldown > 0f) return DodgeResult.OnCooldown
+    fun dodge(): DodgeResult = motion.dodge(player.facing, player.isAlive)
 
-        val direction = if (moveInput == WorldPoint.ZERO) {
-            WorldPoint(player.facing.dx.toFloat(), player.facing.dy.toFloat(), 0f)
-        } else {
-            moveInput
-        }
-
-        rollDirection = direction
-        rollRemaining = ROLL_DURATION
-        invulnerableFor = ROLL_INVULNERABILITY
-        rollCooldown = ROLL_COOLDOWN
-        return DodgeResult.Rolling
-    }
-
-    /**
-     * Integrates movement for one frame.
-     *
-     * Axes are resolved separately so that walking into a wall at an angle
-     * slides along it instead of stopping dead. Sticking on geometry is the
-     * single most felt movement bug in an isometric game, because the player
-     * cannot see the wall they are caught on.
-     */
     private fun advanceMovement(deltaSeconds: Float) {
-        rollCooldown = (rollCooldown - deltaSeconds).coerceAtLeast(0f)
-        invulnerableFor = (invulnerableFor - deltaSeconds).coerceAtLeast(0f)
-
-        val velocity: WorldPoint
-        if (rollRemaining > 0f) {
-            rollRemaining = (rollRemaining - deltaSeconds).coerceAtLeast(0f)
-            velocity = WorldPoint(rollDirection.x * ROLL_SPEED, rollDirection.y * ROLL_SPEED, 0f)
-        } else if (moveInput != WorldPoint.ZERO) {
-            velocity = WorldPoint(moveInput.x * WALK_SPEED, moveInput.y * WALK_SPEED, 0f)
-        } else {
-            settlePlayer()
-            return
-        }
-
-        val stepX = velocity.x * deltaSeconds
-        val stepY = velocity.y * deltaSeconds
-
-        var position = player.position
-        position = tryAxis(position, stepX, 0f) ?: position
-        position = tryAxis(position, 0f, stepY) ?: position
-
-        player = player.copy(position = position)
+        player = motion.advance(player, deltaSeconds)
         streamingWorld.focusOn(player.blockPos)
-        settlePlayer()
     }
 
     /**
-     * Attempts one axis of movement, returning the new position or null when
-     * the way is blocked. Climbing a single step is free; anything taller is a
-     * wall.
-     */
-    private fun tryAxis(from: WorldPoint, dx: Float, dy: Float): WorldPoint? {
-        if (dx == 0f && dy == 0f) return from
-
-        val target = from.translated(dx, dy, 0f)
-        val column = BlockPos(floor(target.x).toInt(), floor(target.y).toInt(), 0)
-        val currentZ = from.toBlockPos().z
-
-        var highestSolid = -1
-        for (z in (currentZ + STEP_UP) downTo 0) {
-            if (streamingWorld.isSolid(BlockPos(column.x, column.y, z))) {
-                highestSolid = z
-                break
-            }
-        }
-
-        val standingZ = highestSolid + 1
-        if (standingZ - currentZ > STEP_UP) return null
-        if (standingZ >= Chunk.HEIGHT) return null
-        return WorldPoint(target.x, target.y, standingZ.toFloat())
-    }
-
-    /**
-     * Single-shot movement, kept for tests and for anything that wants to nudge
-     * the player a fixed distance rather than hold a direction.
+     * Single-shot movement, for anything that wants to nudge the player a fixed
+     * distance rather than hold a direction.
      */
     fun move(dx: Float, dy: Float): MoveOutcome {
-        if (dx == 0f && dy == 0f) return MoveOutcome(player, moved = false, blocked = false)
-
-        val facing = facingFor(dx, dy)
-        player = player.copy(facing = facing)
-
-        var position = player.position
-        val afterX = tryAxis(position, dx, 0f)
-        val afterY = tryAxis(afterX ?: position, 0f, dy)
-        val resolved = afterY ?: afterX
-
-        if (resolved == null || resolved == player.position) {
-            return MoveOutcome(player, moved = false, blocked = true)
-        }
-
-        player = player.copy(position = resolved)
-        streamingWorld.focusOn(player.blockPos)
-        settlePlayer()
-        return MoveOutcome(player, moved = true, blocked = false)
+        val outcome = motion.step(player, dx, dy)
+        player = outcome.player
+        if (outcome.moved) streamingWorld.focusOn(player.blockPos)
+        return outcome
     }
 
-    private fun facingFor(dx: Float, dy: Float): Direction = when {
-        abs(dx) >= abs(dy) && dx > 0 -> Direction.EAST
-        abs(dx) >= abs(dy) -> Direction.WEST
-        dy > 0 -> Direction.SOUTH
-        else -> Direction.NORTH
-    }
 
     // ---- interaction -----------------------------------------------------
 
@@ -345,7 +243,7 @@ class WorldSession(
                 if (result.drop !in player.hotbar && content.registry.contains(result.drop)) {
                     player = player.copy(hotbar = player.hotbar + result.drop)
                 }
-                settlePlayer()
+                player = motion.advance(player, 0f)
             }
             is MineResult.Rejected -> {
                 miningTarget = null
@@ -367,10 +265,25 @@ class WorldSession(
             return if (hardness <= 0f) 0f else (miningProgress / hardness).coerceIn(0f, 1f)
         }
 
-    /** Places the selected hotbar block, spending one from the inventory. */
-    fun place(target: BlockPos): PlaceResult {
+    /**
+     * Places the selected hotbar block against the block the player touched,
+     * spending one from the inventory.
+     *
+     * [picked] is a solid block — the only thing a tap can resolve to — so the
+     * cell to fill is the face next to it, not the block itself.
+     */
+    fun place(picked: BlockPos): PlaceResult {
         val blockId = player.selectedBlockId
             ?: return PlaceResult.Rejected(PlaceRejection.UNKNOWN_BLOCK)
+
+        // Building and digging share a surface. Placing without stopping the dig
+        // means the block you were mining keeps breaking while you build, which
+        // reads as "placing removes blocks".
+        cancelMining()
+
+        val target = interaction.placementCellFor(picked, player.blockPos, actorCells())
+            ?: return PlaceResult.Rejected(PlaceRejection.OCCUPIED)
+
         val spent = player.consuming(blockId)
             ?: return PlaceResult.Rejected(PlaceRejection.UNKNOWN_BLOCK)
 
@@ -388,21 +301,27 @@ class WorldSession(
         return result
     }
 
+    /** Where a tap on [picked] would actually put a block, for the ghost preview. */
+    fun placementPreviewFor(picked: BlockPos): BlockPos? =
+        interaction.placementCellFor(picked, player.blockPos, actorCells())
+
+    /**
+     * Cells a body is standing in. Tapping the ground at your feet should build
+     * beside you rather than refuse, so these are skipped while resolving the
+     * cell rather than rejected after one has been chosen.
+     */
+    private fun actorCells(): Set<BlockPos> =
+        buildSet {
+            add(player.feet)
+            add(player.feet.above())
+            enemies.forEach {
+                add(it.blockPos)
+                add(it.blockPos.above())
+            }
+        }
+
     fun selectSlot(slot: Int) {
         player = player.selectingSlot(slot)
-    }
-
-    /** Drops the player if mining removed the ground from under them. */
-    private fun settlePlayer() {
-        val feet = player.blockPos
-        if (feet.z <= 0) return
-        if (streamingWorld.isSolid(feet.below())) return
-
-        var z = feet.z
-        while (z > 0 && !streamingWorld.isSolid(BlockPos(feet.x, feet.y, z - 1))) {
-            z--
-        }
-        player = player.copy(position = player.position.copy(z = z.toFloat()))
     }
 
     // ---- the fight ------------------------------------------------------
@@ -425,6 +344,7 @@ class WorldSession(
         feedbackLog.advance(deltaSeconds)
         hitFlashes.advance(deltaSeconds)
         advanceAttackHolds(deltaSeconds)
+        advanceImpacts(deltaSeconds)
 
         // Movement first: a roll should be able to carry the player out of
         // reach before the monsters around them take their swing.
@@ -541,6 +461,7 @@ class WorldSession(
             cooldowns = player.cooldowns.started(skill),
         )
         attackHolds[PLAYER_ACTOR_ID] = ATTACK_ANIMATION_HOLD
+        castHolds[PLAYER_ACTOR_ID] = ATTACK_ANIMATION_HOLD
         return applyOutcome(outcome, skill)
     }
 
@@ -579,6 +500,21 @@ class WorldSession(
                 )
             }
             hitFlashes.strike(hit.enemyId)
+            // Shoved away from whoever swung. Force scales with the blow, so a
+            // critical visibly throws and a chip barely rocks — the difference
+            // between a heavy hit and a glancing one becomes something you see
+            // rather than something you read off a number.
+            // Only a heavy hit really throws. An ordinary swing barely rocks
+            // the body, because knocking a monster back every time pushes it
+            // out of reach and turns melee into chase-and-poke.
+            val heavy = hit.result.wasCritical ||
+                hit.result.amount >= hit.enemy.stats.maxHealth * HEAVY_HIT_FRACTION
+            impacts.strike(
+                actorId = hit.enemyId,
+                from = player.position,
+                to = hit.enemy.position,
+                force = hit.result.amount.toFloat() * if (heavy) 1f else LIGHT_HIT_DAMPING,
+            )
         }
 
         val healed = outcome.hits.sumOf { it.result.healedAttacker }
@@ -597,6 +533,7 @@ class WorldSession(
             enemies = enemies.filter { it.isAlive }
             slain.forEach { enemy ->
                 hitFlashes.forget(enemy.instanceId)
+                impacts.forget(enemy.instanceId)
                 dropLootFor(enemy)
                 dropInsertFor(enemy)
             }
@@ -772,15 +709,14 @@ class WorldSession(
 
         // The run starts clean: no leftover roll, no stale numbers floating over
         // a corpse that is no longer there.
-        moveInput = WorldPoint.ZERO
-        rollRemaining = 0f
-        invulnerableFor = 0f
-        rollCooldown = 0f
+        motion.reset()
         miningTarget = null
         miningProgress = 0f
         feedbackLog.clear()
         hitFlashes.clear()
+        impacts.clear()
         attackHolds.clear()
+        castHolds.clear()
         playbacks.clear()
 
         // Monsters that had cornered the player do not get to greet them at the
@@ -899,12 +835,26 @@ class WorldSession(
         return player.isAlive
     }
 
+    /** Moves whatever is still being knocked back, and forgets the dead. */
+    private fun advanceImpacts(deltaSeconds: Float) {
+        val moved = impacts.advance(
+            deltaSeconds,
+            enemies.associate { it.instanceId to it.position },
+        )
+        if (moved.isEmpty()) return
+        enemies = enemies.map { enemy ->
+            moved[enemy.instanceId]?.let { enemy.copy(position = it) } ?: enemy
+        }
+    }
+
     private fun advanceAttackHolds(deltaSeconds: Float) {
-        val iterator = attackHolds.entries.iterator()
-        while (iterator.hasNext()) {
-            val entry = iterator.next()
-            val remaining = entry.value - deltaSeconds
-            if (remaining <= 0f) iterator.remove() else entry.setValue(remaining)
+        listOf(attackHolds, castHolds).forEach { holds ->
+            val iterator = holds.entries.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                val remaining = entry.value - deltaSeconds
+                if (remaining <= 0f) iterator.remove() else entry.setValue(remaining)
+            }
         }
     }
 
@@ -923,7 +873,8 @@ class WorldSession(
             isRolling = isRolling,
             wasHitRecently = hitFlashes.intensity(PLAYER_ACTOR_ID) > 0f,
             isAttacking = attackHolds.containsKey(PLAYER_ACTOR_ID),
-            isMoving = moveInput != WorldPoint.ZERO,
+            isCasting = castHolds.containsKey(PLAYER_ACTOR_ID),
+            isMoving = motion.input != WorldPoint.ZERO,
         )
         playbacks[PLAYER_ACTOR_ID] = animate(PLAYER_ACTOR_ID, playerState, deltaMs)
 
@@ -1050,7 +1001,9 @@ class WorldSession(
      * position that produced the terrain in the first place.
      */
     val currentBiome: BiomeDefinition
-        get() = generator.biomeAt(player.blockPos.x, player.blockPos.y)
+        get() = biomeSource?.biomeAt(player.blockPos.x, player.blockPos.y)
+            ?: content.biomes.firstOrNull()
+            ?: UNCHARTED
 
     /** Immutable view for the UI layer. */
     fun snapshot(): SessionSnapshot = SessionSnapshot(
@@ -1076,8 +1029,6 @@ class WorldSession(
     )
 
     companion object {
-        /** How far the player climbs without a jump. */
-        const val STEP_UP = 1
         const val SPAWN_SEARCH_RADIUS = 12
         const val PICKUP_RADIUS = 1.6f
         const val BASE_DROP_CHANCE = 0.35f
@@ -1091,19 +1042,11 @@ class WorldSession(
         const val REVIVE_CLEAR_RADIUS = 8f
         const val DEFAULT_DAMAGE_TYPE = "stratum:physical"
 
-        /** Blocks per second at full stick deflection. */
-        const val WALK_SPEED = 4.2f
-        /** A roll is a burst, not a sprint: fast and over quickly. */
-        const val ROLL_SPEED = 11f
-        const val ROLL_DURATION = 0.28f
-        /**
-         * Shorter than the roll, so the end of a roll is vulnerable. Rolling
-         * through an attack has to be timed rather than held.
-         */
-        const val ROLL_INVULNERABILITY = 0.2f
-        const val ROLL_COOLDOWN = 1.1f
-        /** Below this the stick is treated as centred. */
-        const val INPUT_DEADZONE = 0.12f
+
+        /** A hit taking this share of a body's health throws it properly. */
+        const val HEAVY_HIT_FRACTION = 0.25f
+        /** What an ordinary swing's knockback is scaled down to. */
+        const val LIGHT_HIT_DAMPING = 0.2f
 
         const val PLAYER_ACTOR_ID = "player"
         /** How long an actor is considered mid-swing, for animation only. */
@@ -1115,6 +1058,15 @@ class WorldSession(
         private const val FEEDBACK_LEVEL = 0xFFFFC107L
         private const val FEEDBACK_BUILT = 0xFF8FB8DEL
         private val SPAWN_CHUNK = com.stratum.core.domain.world.ChunkPos(0, 0)
+
+        /** Shown when a generator names no regions and the packs define none. */
+        private val UNCHARTED = BiomeDefinition(
+            id = "stratum:uncharted",
+            name = "Uncharted",
+            surfaceBlockId = com.stratum.core.domain.world.BlockType.BEDROCK.id,
+            subsurfaceBlockId = com.stratum.core.domain.world.BlockType.BEDROCK.id,
+            bedrockFillerBlockId = com.stratum.core.domain.world.BlockType.BEDROCK.id,
+        )
     }
 }
 
