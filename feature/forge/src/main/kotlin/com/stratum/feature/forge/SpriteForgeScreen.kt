@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -71,6 +72,7 @@ fun SpriteForgeScreen(
         modifier = modifier,
         onSubjectChange = viewModel::updateSubject,
         onStyleChange = viewModel::updateStyle,
+        onStylePreset = viewModel::selectStyle,
         onTargetChange = viewModel::selectTarget,
         onGenerate = viewModel::generate,
         onDelete = viewModel::delete,
@@ -87,6 +89,7 @@ fun SpriteForgeContent(
     modifier: Modifier = Modifier,
     onSubjectChange: (String) -> Unit = {},
     onStyleChange: (String) -> Unit = {},
+    onStylePreset: (SpriteStyle) -> Unit = {},
     onTargetChange: (SpriteTarget) -> Unit = {},
     onGenerate: () -> Unit = {},
     onDelete: (String) -> Unit = {},
@@ -149,14 +152,35 @@ fun SpriteForgeContent(
 
             Spacer(Modifier.height(Space.medium))
 
+            // A model given no style draws a picture, and a picture is not a
+            // sprite. Presets make the useful answer one tap rather than a
+            // blank field the player is expected to know how to fill.
+            Row(
+                // Four chips do not fit across a narrow phone, and a wrapped
+                // chip row is worse than a scrolled one here: the field below
+                // must stay where the eye expects it.
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(Space.small),
+            ) {
+                SpriteStyle.entries.forEach { preset ->
+                    StratumChip(
+                        label = preset.label,
+                        selected = state.style == preset.direction,
+                        onClick = { onStylePreset(preset) },
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(Space.small))
+
             OutlinedTextField(
                 value = state.style,
                 onValueChange = onStyleChange,
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Style (optional)") },
+                label = { Text("Style") },
                 placeholder = { Text("chunky pixel art, limited palette") },
                 enabled = !state.busy,
-                singleLine = true,
+                minLines = 2,
             )
 
             Spacer(Modifier.height(Space.medium))

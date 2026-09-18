@@ -51,6 +51,16 @@ class SpriteForgeViewModel(
         _state.value = _state.value.copy(style = style)
     }
 
+    /** Fills the style field from a preset, or clears it by tapping the chosen one again. */
+    fun selectStyle(style: SpriteStyle) {
+        val current = _state.value
+        _state.value = if (current.style == style.direction) {
+            current.copy(style = "")
+        } else {
+            current.copy(style = style.direction)
+        }
+    }
+
     fun selectTarget(target: SpriteTarget) {
         _state.value = _state.value.copy(target = target)
     }
@@ -169,6 +179,33 @@ class SpriteForgeViewModel(
  * walks does not need an attack row, and asking a weak image model for fewer
  * frames is the single most effective way to get usable art out of it.
  */
+/**
+ * Ready-made style directions.
+ *
+ * "Style (optional)" left empty is the single biggest cause of a sheet that
+ * comes back as one soft illustration: a model given no style draws a picture,
+ * and a picture is not a sprite. These name the handful of styles that survive
+ * being cut into cells and drawn at forty pixels tall.
+ */
+enum class SpriteStyle(val label: String, val direction: String) {
+    PIXEL(
+        "Pixel art",
+        "Pixel art game sprites, limited palette, bold readable silhouette, dark outline.",
+    ),
+    CHUNKY(
+        "Chunky",
+        "Chunky low-resolution pixel art, very few colours, thick dark outline, no anti-aliasing.",
+    ),
+    INKED(
+        "Inked",
+        "Flat cel-shaded cartoon sprites, heavy black ink outline, simple shapes, no gradients.",
+    ),
+    GRIM(
+        "Grim",
+        "Dark fantasy game sprites, muted palette, hard rim light, heavy silhouette, no background.",
+    ),
+}
+
 enum class SpriteTarget(val label: String, val namespace: String, val layout: SheetLayout) {
     /** The character you play. Worth the denser sheet and the extra frames. */
     HERO("Hero", "hero", SheetLayout.detailed()),

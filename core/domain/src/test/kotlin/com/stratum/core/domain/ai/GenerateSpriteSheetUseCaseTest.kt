@@ -83,14 +83,43 @@ class GenerateSpriteSheetUseCaseTest {
     }
 
     @Test
-    fun `a simple layout asks for a smaller sheet`() = runTest {
-        val model = FakeImageModel(Result.success(image(256, 128)))
+    fun `every layout asks for a square canvas a provider will actually accept`() = runTest {
+        // Asking for 384x448 because that is what a 6x7 grid of 64px frames
+        // measures gets rejected by some providers and silently rounded by
+        // others, and a sheet cut on a size that was quietly changed shears
+        // every frame. The grid belongs in the prompt, not in the canvas.
+        listOf(SheetLayout.detailed(), SheetLayout.standard(), SheetLayout.simple()).forEach { layout ->
+            val model = FakeImageModel(Result.success(image(layout.canvas, layout.canvas)))
+            GenerateSpriteSheetUseCase(model)(
+                SpriteSheetRequest(subject = "a rat", layout = layout),
+            ).getOrThrow()
+
+            val request = model.lastRequest!!
+            assertEquals(request.width, request.height, "the canvas was not square")
+            assertTrue(
+                request.width in listOf(SheetLayout.SMALL_CANVAS, SheetLayout.DEFAULT_CANVAS),
+                "asked for ${request.width}px, which is not a size providers support",
+            )
+        }
+    }
+
+    @Test
+    fun `the prompt forbids the one big character that makes a sprite roll`() = runTest {
+        // The failure behind a sprite that pans instead of animating: the model
+        // draws one large figure, the sheet is cut on a grid that was never
+        // drawn, and every frame is a crop of the same picture.
+        val model = FakeImageModel(Result.success(image(1024, 1024)))
         GenerateSpriteSheetUseCase(model)(
-            SpriteSheetRequest(subject = "a rat", layout = SheetLayout.simple()),
+            SpriteSheetRequest(subject = "a warrior", layout = SheetLayout.detailed()),
         ).getOrThrow()
 
-        assertEquals(256, model.lastRequest!!.width)
-        assertEquals(128, model.lastRequest!!.height)
+        val prompt = model.lastRequest!!.prompt
+        assertTrue(prompt.contains("42 cells"), "the prompt stopped counting the cells")
+        assertTrue(prompt.contains("1024 by 1024 pixels"))
+        assertTrue(
+            prompt.contains("Do NOT draw one large character"),
+            "the prompt stopped naming the rolling-sprite mistake",
+        )
     }
 
     @Test
