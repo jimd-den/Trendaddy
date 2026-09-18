@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import com.stratum.core.domain.sprite.GridOutcome
 import com.stratum.core.domain.sprite.GridVerdict
+import com.stratum.core.domain.sprite.KeyResult
 import com.stratum.core.domain.sprite.KeyStrategy
 import com.stratum.core.domain.sprite.SheetGrid
 import com.stratum.core.domain.sprite.SheetInspection
@@ -80,17 +81,38 @@ object GeneratedSheetPreparer {
                 sheet.recut(verdict.grid, width, height)
         }
 
+        // Second pass, now that the grid is known. A colour found framing every
+        // cell is the canvas rather than anything the character wears, and can
+        // be cleared wherever it appears — including the pockets a flood from
+        // the outside can never reach. Run from the original pixels, not the
+        // first pass's, so the two are genuinely alternatives rather than one
+        // built on the other.
+        val best = keyed.betterOf(
+            SpriteKeying.key(pixels, width, height, cells = verdict.grid),
+        )
+
         // Nothing was cleared: re-encoding would only re-compress the same
         // pixels, so the original bytes are kept.
-        if (!keyed.cleared) {
-            return PreparedSheet(cut, bytes, keyed.strategy, 0, verdict)
+        if (!best.cleared) {
+            return PreparedSheet(cut, bytes, best.strategy, 0, verdict)
         }
 
-        val encoded = encode(keyed.pixels, width, height)
+        val encoded = encode(best.pixels, width, height)
             ?: return PreparedSheet(cut, bytes, KeyStrategy.NONE, 0, verdict)
 
-        return PreparedSheet(cut, encoded, keyed.strategy, keyed.clearedPixels, verdict)
+        return PreparedSheet(cut, encoded, best.strategy, best.clearedPixels, verdict)
     }
+
+    /**
+     * The pass that removed more backdrop.
+     *
+     * The grid-aware pass usually wins, but not always: when no colour frames
+     * every cell it falls back to the same flood as the first pass and ties, and
+     * a sheet cut as a single still has no cells to reason about at all. Taking
+     * the larger result means the extra knowledge can only help.
+     */
+    private fun KeyResult.betterOf(other: KeyResult): KeyResult =
+        if (other.clearedPixels > clearedPixels) other else this
 
     private fun encode(pixels: IntArray, width: Int, height: Int): ByteArray? {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)

@@ -140,4 +140,87 @@ class SpriteKeyingTest {
         assertEquals(KeyStrategy.NONE, SpriteKeying.key(IntArray(0), 0, 0).strategy)
         assertEquals(KeyStrategy.NONE, SpriteKeying.key(IntArray(4), 8, 8).strategy)
     }
+
+    @Test
+    fun `a colour that frames every cell is the canvas, and goes from inside the figure too`() {
+        // The pocket between a pair of legs is background, and a flood from the
+        // outside can never reach it. Knowing the grid settles what a flood
+        // cannot: a colour that borders all four frames is the canvas, not the
+        // costume, so it can go wherever it appears.
+        val size = 40
+        val white = 0xFFFFFFFF.toInt()
+        val ink = 0xFF101010.toInt()
+        val pixels = IntArray(size * size) { white }
+        // A ring of ink in each cell of a 2x2 grid, enclosing white.
+        for (cellY in 0 until 2) {
+            for (cellX in 0 until 2) {
+                val x0 = cellX * 20 + 5
+                val y0 = cellY * 20 + 5
+                for (x in x0 until x0 + 10) {
+                    pixels[y0 * size + x] = ink
+                    pixels[(y0 + 9) * size + x] = ink
+                }
+                for (y in y0 until y0 + 10) {
+                    pixels[y * size + x0] = ink
+                    pixels[y * size + x0 + 9] = ink
+                }
+            }
+        }
+
+        val blind = SpriteKeying.key(pixels, size, size)
+        val knowing = SpriteKeying.key(pixels, size, size, cells = SheetGrid(2, 2))
+
+        assertEquals(KeyStrategy.SOLID, knowing.strategy)
+        assertTrue(
+            knowing.clearedPixels > blind.clearedPixels,
+            "knowing the grid cleared ${knowing.clearedPixels}, no more than the " +
+                "${blind.clearedPixels} a flood from the outside reached",
+        )
+        // The enclosed pockets: 8x8 of white inside each of the four rings.
+        assertEquals(blind.clearedPixels + 4 * 8 * 8, knowing.clearedPixels)
+    }
+
+    @Test
+    fun `clearing the canvas leaves the figure alone, pockets and all`() {
+        // The canvas rule clears a colour everywhere, so the thing it must not
+        // do is take the character with it. A pale figure on a dark backdrop is
+        // the case that would show it.
+        val size = 40
+        val navy = 0xFF101828.toInt()
+        val bone = 0xFFF2E8D5.toInt()
+        val pixels = IntArray(size * size) { navy }
+        for (cellY in 0 until 2) {
+            for (cellX in 0 until 2) {
+                val x0 = cellX * 20 + 6
+                val y0 = cellY * 20 + 6
+                for (y in y0 until y0 + 8) {
+                    for (x in x0 until x0 + 8) pixels[y * size + x] = bone
+                }
+            }
+        }
+
+        val keyed = SpriteKeying.key(pixels, size, size, cells = SheetGrid(2, 2))
+
+        assertEquals(KeyStrategy.SOLID, keyed.strategy)
+        val survivors = keyed.pixels.count { (it ushr 24) and 0xFF > 0 }
+        assertEquals(4 * 8 * 8, survivors, "the canvas clear ate into the figures")
+    }
+
+    @Test
+    fun `a grid finer than the sheet does not clear the character itself`() {
+        // Flooding or clearing inside boundaries that are not there must never
+        // eat the subject.
+        val size = 40
+        val white = 0xFFFFFFFF.toInt()
+        val ink = 0xFF101010.toInt()
+        val pixels = IntArray(size * size) { white }
+        for (y in 12 until 28) {
+            for (x in 12 until 28) pixels[y * size + x] = ink
+        }
+
+        val keyed = SpriteKeying.key(pixels, size, size, cells = SheetGrid(4, 4))
+
+        val survivors = keyed.pixels.count { (it ushr 24) and 0xFF > 0 }
+        assertEquals(16 * 16, survivors, "the flood ate into the character")
+    }
 }
