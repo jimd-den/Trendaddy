@@ -45,7 +45,28 @@ data class ImageRequest(
     val height: Int = 512,
     /** Transparent output is non-negotiable for sprite sheets. */
     val requireTransparency: Boolean = true,
+    /**
+     * Images handed to the model along with the prompt.
+     *
+     * This is what turns a generator into an editor, and it is the only
+     * reliable way to get a *character* rather than a series of strangers. Ask
+     * a model for eight poses of a bronze warrior in eight calls and you get
+     * eight different warriors; hand it the warrior each time and ask only for
+     * the pose to change, and it is the same one.
+     */
+    val references: List<ImageReference> = emptyList(),
 )
+
+/** An image sent to the model, rather than one it sent back. */
+data class ImageReference(val bytes: ByteArray, val mimeType: String = "image/png") {
+    // ByteArray compares by identity, which would make two copies of the same
+    // reference unequal and quietly break every test that checks what was sent.
+    override fun equals(other: Any?): Boolean =
+        this === other ||
+            (other is ImageReference && mimeType == other.mimeType && bytes.contentEquals(other.bytes))
+
+    override fun hashCode(): Int = 31 * bytes.contentHashCode() + mimeType.hashCode()
+}
 
 data class GeneratedImage(
     val bytes: ByteArray,

@@ -64,6 +64,8 @@ fun SpriteForgeScreen(
     previewFor: (String) -> ImageBitmap? = { null },
     /** Opens the frame mapper, for fixing a sheet rather than regenerating it. */
     onMapFrames: () -> Unit = {},
+    /** Opens the pose forge, which builds a character from one drawing. */
+    onPoseForge: () -> Unit = {},
 ) {
     // Re-read the provider on every visit. The view model outlives this screen,
     // so without this a key saved in settings a moment ago is still reported as
@@ -86,6 +88,7 @@ fun SpriteForgeScreen(
         onToggleDetails = viewModel::toggleDetails,
         previewFor = previewFor,
         onMapFrames = onMapFrames,
+        onPoseForge = onPoseForge,
     )
 }
 
@@ -105,6 +108,7 @@ fun SpriteForgeContent(
     onToggleDetails: () -> Unit = {},
     previewFor: (String) -> ImageBitmap? = { null },
     onMapFrames: () -> Unit = {},
+    onPoseForge: () -> Unit = {},
 ) {
     val colors = StratumTheme.colors
 
@@ -132,6 +136,31 @@ fun SpriteForgeContent(
             style = MaterialTheme.typography.bodyMedium,
             color = colors.inkMuted,
         )
+
+        Spacer(Modifier.height(Space.medium))
+
+        // The other way to make a character, offered before the prompt field
+        // rather than after it: asking one model for a whole animated sheet is
+        // the approach with the worst odds on this screen, and someone who
+        // wants consistent animation should hear about the one that works
+        // before they spend a generation finding out.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Want the same character across every frame? Draw it once and pose it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.inkMuted,
+                modifier = Modifier.weight(1f),
+            )
+            StratumAction(
+                label = "Pose forge",
+                onClick = onPoseForge,
+                emphasis = ActionEmphasis.SECONDARY,
+            )
+        }
 
         Spacer(Modifier.height(Space.medium))
 

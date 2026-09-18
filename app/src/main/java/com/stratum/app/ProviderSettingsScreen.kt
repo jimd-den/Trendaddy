@@ -108,7 +108,17 @@ fun ProviderSettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Image model") },
                 placeholder = { Text("google/gemini-2.5-flash-image") },
-                supportingText = { Text("Draws sprite sheets.") },
+                // The pose forge hands the model a picture and asks for it
+                // back in a new pose, which a text-to-image model cannot do at
+                // all -- it fails on every one of forty frames. Worth naming
+                // here rather than leaving to be discovered one generation at
+                // a time.
+                supportingText = {
+                    Text(
+                        "Draws sprite sheets. For the pose forge it must also accept an image " +
+                            "as input, like qwen/qwen3-image-pro or google/gemini-2.5-flash-image.",
+                    )
+                },
                 singleLine = true,
             )
             Spacer(Modifier.height(Space.medium))

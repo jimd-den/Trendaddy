@@ -160,6 +160,50 @@ frames are marked, because re-slicing rebuilds frames from grid positions and a
 rectangle someone drew has none; without the mark, changing the column count
 would delete their work.
 
+## Why a character is drawn once and posed forty times
+
+Asking an image model for a sprite sheet asks it to solve two problems at once,
+and it is only good at one of them. Drawing a striking character once is
+something it does well. Drawing the *same* character forty times, in forty
+consistent poses, it does badly — and no prompt fixes that, because nothing ties
+forty separate calls together. Each one invents a slightly different helmet.
+
+So the pose pipeline separates them. `GenerateBasePoseUseCase` asks for one
+figure, large, in a T-pose: never a frame anyone plays, and exactly right as an
+anchor, because nothing is occluded. An editor can only preserve what it can
+see, and a character anchored on a three-quarter action pose loses whatever that
+pose was hiding the first time the arms move.
+
+Then `GeneratePoseFrameUseCase` hands that picture back to the model once per
+frame, changing only the body. Identity comes from pixels rather than from a
+description, which is the one thing a model cannot misremember. Every frame is
+edited from the *reference*, never from the previous frame: chaining compounds
+each generation's drift until frame eight is somebody else. A star, not a chain.
+
+`PoseScript` holds the poses themselves as data. A walk cycle is contact,
+passing, contact, passing — that has been true since before computers, and it is
+not something a model should be improvising per run.
+
+The cost shapes everything downstream. Forty generations is minutes and money,
+so `PoseSheetPlanner` plans the sheet before a single pose exists: each frame
+knows its cell from the moment it is asked for, which is what makes a run
+resumable at frame thirty-one and lets one bad frame be redrawn on its own.
+`PoseLibrary` writes every pose to disk as it arrives, at full size, so a set can
+be re-packed at another frame size later without paying for anything twice.
+
+`PoseSheetComposer` does the part that needs pixels: chroma key, measure, scale,
+pack. The measuring pass is the point. Each pose arrives on its own canvas with
+the figure at whatever size and height the model felt like, and dropping those
+into cells as they arrive gives a character that pulses in size and bobs off the
+floor — which reads as broken in a way the individual frames never hint at. So
+the whole set is measured first, scaled by one factor, and hung from one
+baseline.
+
+The background is asked for as flat chroma green rather than as transparency.
+Models answer a request for alpha by *drawing* the editor checkerboard at least
+as often as they return a real alpha channel, and a drawn checkerboard is
+unrecoverable; a flat colour is unambiguous to produce and trivial to key out.
+
 ## Why the renderer makes up the difference
 
 Letting a rat's death borrow its idle keeps a dungeon shippable. On its own it

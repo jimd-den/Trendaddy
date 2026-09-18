@@ -4,10 +4,13 @@ import android.content.Context
 import com.stratum.core.data.ai.OpenRouterImageModel
 import com.stratum.core.data.ai.OpenRouterLanguageModel
 import com.stratum.core.data.sprite.SpriteLibrary
+import com.stratum.core.data.sprite.PoseLibrary
 import com.stratum.core.data.sprite.SpriteProjectStore
 import com.stratum.core.data.settings.ProviderSettingsStore
 import com.stratum.core.domain.ai.GenerateContentPackUseCase
 import com.stratum.core.domain.ai.GenerateLoreUseCase
+import com.stratum.core.domain.ai.GenerateBasePoseUseCase
+import com.stratum.core.domain.ai.GeneratePoseFrameUseCase
 import com.stratum.core.domain.ai.GenerateSpriteSheetUseCase
 
 /**
@@ -34,11 +37,23 @@ class AiWiring(context: Context) {
      */
     val spriteProjects = SpriteProjectStore(context)
 
+    /**
+     * The full-size poses a character was built from, kept so a set can be
+     * resumed after a failure and re-packed at another frame size without
+     * paying for a single generation twice.
+     */
+    val poses = PoseLibrary(context)
+
     val generateContentPack = GenerateContentPackUseCase(languageModel)
 
     val generateLore = GenerateLoreUseCase(languageModel)
 
     val generateSpriteSheet = GenerateSpriteSheetUseCase(imageModel)
+
+    /** The one drawing a character is built from, and the edits that animate it. */
+    val generateBasePose = GenerateBasePoseUseCase(imageModel)
+
+    val generatePoseFrame = GeneratePoseFrameUseCase(imageModel)
 
     val modelCatalog = languageModel
 

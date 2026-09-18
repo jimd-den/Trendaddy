@@ -43,12 +43,16 @@ import com.stratum.feature.forge.ForgeScreen
 import com.stratum.feature.forge.ForgeViewModel
 import com.stratum.feature.forge.SpriteForgeScreen
 import com.stratum.feature.forge.SpriteForgeViewModel
+import com.stratum.feature.forge.PoseForgeScreen
+import com.stratum.feature.forge.PoseForgeViewModel
 import com.stratum.feature.forge.SpriteMapperScreen
 import com.stratum.feature.forge.SpriteMapperViewModel
 import com.stratum.feature.hero.ClassForgeScreen
 import com.stratum.feature.hero.ClassForgeViewModel
 import com.stratum.core.data.hero.CustomClassStore
+import android.graphics.BitmapFactory
 import com.stratum.core.data.sprite.GeneratedSheetPreparer
+import com.stratum.core.data.sprite.PoseSheetComposer
 import com.stratum.core.data.sprite.SpriteAtlasBaker
 import com.stratum.core.domain.sprite.SheetPreparation
 import com.stratum.core.domain.sprite.SpriteMapper
@@ -61,7 +65,7 @@ import com.stratum.feature.play.PlayScreen as PlayScreenRoute
 import com.stratum.feature.play.PlayViewModel
 
 /** Top-level destinations. Deliberately few: the game is the app, not a tab in it. */
-private enum class Destination { HOME, PLAY, CLASSES, FORGE, SPRITES, MAPPER, SETTINGS, STUDIO }
+private enum class Destination { HOME, PLAY, CLASSES, FORGE, SPRITES, POSES, MAPPER, SETTINGS, STUDIO }
 
 /**
  * The app shell.
@@ -268,6 +272,50 @@ fun StratumApp(
                 // interpret.
                 previewFor = { id -> ai.sprites.drawableBitmapFor(id)?.asImageBitmap() },
                 onMapFrames = { destination = Destination.MAPPER },
+                onPoseForge = { destination = Destination.POSES },
+            )
+        }
+
+        Destination.POSES -> {
+            val poseViewModel: PoseForgeViewModel = viewModel(
+                factory = PoseForgeViewModel.factory(
+                    drawReference = { request, observer ->
+                        ai.generateBasePose(request, observer)
+                    },
+                    drawPose = { request, observer -> ai.generatePoseFrame(request, observer) },
+                    saveReference = ai.poses::saveReference,
+                    loadReference = ai.poses::reference,
+                    hasReference = ai.poses::hasReference,
+                    savePose = ai.poses::savePose,
+                    dropPose = ai.poses::deletePose,
+                    posesDrawn = ai.poses::keysIn,
+                    composeSheet = { setId, plan ->
+                        // Loaded by key rather than all at once: a full
+                        // character is forty 1024-pixel images, which is more
+                        // than a phone will hold decoded at the same time.
+                        val composed = PoseSheetComposer.compose(plan) { key ->
+                            ai.poses.pose(setId, key)
+                        }
+                        composed?.let {
+                            ai.sprites.save(it.sheet, it.bytes)
+                            spriteRevision++
+                            it.packed()
+                        }
+                    },
+                    isProviderConfigured = ai::isConfigured,
+                ),
+            )
+            PoseForgeScreen(
+                viewModel = poseViewModel,
+                modifier = modifier,
+                onBack = { destination = Destination.SPRITES },
+                onOpenSettings = { destination = Destination.SETTINGS },
+                referenceFor = { setId ->
+                    ai.poses.reference(setId)?.let { bytes ->
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                    }
+                },
+                sheetPreviewFor = { id -> ai.sprites.drawableBitmapFor(id)?.asImageBitmap() },
             )
         }
 
