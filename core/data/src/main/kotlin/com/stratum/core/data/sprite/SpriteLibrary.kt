@@ -75,6 +75,18 @@ class SpriteLibrary(context: Context) {
     }
 
     /**
+     * The stored file, byte for byte.
+     *
+     * The frame mapper needs the original rather than a decoded bitmap: it
+     * copies the art into a project of its own so that re-cutting a sheet never
+     * touches the only copy of the image it was cut from.
+     */
+    fun bytesFor(sheetId: String): ByteArray? {
+        val file = File(root, "${slugFor(sheetId)}$IMAGE_SUFFIX")
+        return if (file.isFile) runCatching { file.readBytes() }.getOrNull() else null
+    }
+
+    /**
      * The sheet's pixels, or null when there is nothing on them to draw.
      *
      * A blank sheet is not a theoretical case: a generation that came back
@@ -149,6 +161,9 @@ private data class SheetDto(
     val frameHeight: Int,
     val origin: String,
     val clips: List<ClipDto>,
+    // Defaulted, so every sheet written before hand-mapped atlases existed
+    // keeps reading as the mirrored sheet it was.
+    val mirrorsFacings: Boolean = true,
 )
 
 @Serializable
@@ -168,6 +183,7 @@ private fun SpriteSheet.toDto() = SheetDto(
     frameWidth = frameWidth,
     frameHeight = frameHeight,
     origin = origin.name,
+    mirrorsFacings = mirrorsFacings,
     clips = clips.map {
         ClipDto(it.state.name, it.firstFrame, it.frameCount, it.frameDurationMs, it.loops)
     },
@@ -181,6 +197,7 @@ private fun SheetDto.toDomain() = SpriteSheet(
     frameWidth = frameWidth,
     frameHeight = frameHeight,
     origin = runCatching { SpriteOrigin.valueOf(origin) }.getOrDefault(SpriteOrigin.IMPORTED),
+    mirrorsFacings = mirrorsFacings,
     clips = clips.mapNotNull { dto ->
         val state = runCatching { AnimationState.valueOf(dto.state) }.getOrNull()
             ?: return@mapNotNull null

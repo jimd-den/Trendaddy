@@ -43,11 +43,15 @@ import com.stratum.feature.forge.ForgeScreen
 import com.stratum.feature.forge.ForgeViewModel
 import com.stratum.feature.forge.SpriteForgeScreen
 import com.stratum.feature.forge.SpriteForgeViewModel
+import com.stratum.feature.forge.SpriteMapperScreen
+import com.stratum.feature.forge.SpriteMapperViewModel
 import com.stratum.feature.hero.ClassForgeScreen
 import com.stratum.feature.hero.ClassForgeViewModel
 import com.stratum.core.data.hero.CustomClassStore
 import com.stratum.core.data.sprite.GeneratedSheetPreparer
+import com.stratum.core.data.sprite.SpriteAtlasBaker
 import com.stratum.core.domain.sprite.SheetPreparation
+import com.stratum.core.domain.sprite.SpriteMapper
 import com.stratum.core.domain.content.CustomClassPack
 import com.stratum.core.domain.content.HeroClassDefinition
 import com.stratum.core.designsystem.component.StratumChip
@@ -57,7 +61,7 @@ import com.stratum.feature.play.PlayScreen as PlayScreenRoute
 import com.stratum.feature.play.PlayViewModel
 
 /** Top-level destinations. Deliberately few: the game is the app, not a tab in it. */
-private enum class Destination { HOME, PLAY, CLASSES, FORGE, SPRITES, SETTINGS, STUDIO }
+private enum class Destination { HOME, PLAY, CLASSES, FORGE, SPRITES, MAPPER, SETTINGS, STUDIO }
 
 /**
  * The app shell.
@@ -263,6 +267,56 @@ fun StratumApp(
                 // rather than as an empty rectangle the player has to
                 // interpret.
                 previewFor = { id -> ai.sprites.drawableBitmapFor(id)?.asImageBitmap() },
+                onMapFrames = { destination = Destination.MAPPER },
+            )
+        }
+
+        Destination.MAPPER -> {
+            val mapperViewModel: SpriteMapperViewModel = viewModel(
+                factory = SpriteMapperViewModel.factory(
+                    openProject = ai.spriteProjects::load,
+                    sourcePixels = { atlas ->
+                        ai.spriteProjects.sourceFor(atlas.id)?.let(SpriteAtlasBaker::pixelsOf)
+                    },
+                    startProject = { sheet ->
+                        // The art is copied into a project of its own before
+                        // anything is mapped, so re-cutting a sheet can never
+                        // damage the only copy of the image it was cut from.
+                        val bitmap = ai.sprites.bitmapFor(sheet.id)
+                        val bytes = ai.sprites.bytesFor(sheet.id)
+                        if (bitmap == null || bytes == null) {
+                            null
+                        } else {
+                            SpriteMapper.fromSheet(
+                                sheet = sheet,
+                                imageWidth = bitmap.width,
+                                imageHeight = bitmap.height,
+                            ).also { ai.spriteProjects.save(it, bytes) }
+                        }
+                    },
+                    saveProject = { atlas -> ai.spriteProjects.save(atlas) },
+                    bakeAtlas = { atlas ->
+                        val source = ai.spriteProjects.sourceFor(atlas.id)
+                        val baked = source?.let { SpriteAtlasBaker.bake(atlas, it) }
+                        baked?.let {
+                            // Saved under the atlas's own id, so re-baking a
+                            // mapping replaces that sheet rather than leaving
+                            // the world to choose between two versions of it.
+                            ai.sprites.save(it.sheet, it.bytes)
+                            spriteRevision++
+                            it.sheet
+                        }
+                    },
+                    loadSheets = ai.sprites::all,
+                ),
+            )
+            SpriteMapperScreen(
+                viewModel = mapperViewModel,
+                modifier = modifier,
+                onBack = { destination = Destination.SPRITES },
+                sourceFor = { atlas ->
+                    ai.spriteProjects.sourceFor(atlas.id)?.asImageBitmap()
+                },
             )
         }
 

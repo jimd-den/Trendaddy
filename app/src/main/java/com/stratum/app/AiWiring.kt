@@ -4,6 +4,7 @@ import android.content.Context
 import com.stratum.core.data.ai.OpenRouterImageModel
 import com.stratum.core.data.ai.OpenRouterLanguageModel
 import com.stratum.core.data.sprite.SpriteLibrary
+import com.stratum.core.data.sprite.SpriteProjectStore
 import com.stratum.core.data.settings.ProviderSettingsStore
 import com.stratum.core.domain.ai.GenerateContentPackUseCase
 import com.stratum.core.domain.ai.GenerateLoreUseCase
@@ -26,6 +27,12 @@ class AiWiring(context: Context) {
 
     /** Generated sheets live on the device, keyed by id. */
     val sprites = SpriteLibrary(context)
+
+    /**
+     * Hand-mapped atlases and the art they were mapped from, kept apart from
+     * the baked sheets so re-cutting one never destroys the image it came from.
+     */
+    val spriteProjects = SpriteProjectStore(context)
 
     val generateContentPack = GenerateContentPackUseCase(languageModel)
 

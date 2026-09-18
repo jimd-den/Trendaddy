@@ -429,8 +429,10 @@ private fun DrawScope.drawSprite(
 
     // A generated sheet reliably holds one facing, not four. Mirroring buys the
     // other side for nothing and reads correctly at this camera angle, which is
-    // more dependable than asking a model for four consistent angles.
-    if (facing.mirrored) {
+    // more dependable than asking a model for four consistent angles. Art that
+    // says not to -- anything with a readable asymmetry on it -- keeps its one
+    // drawn angle in every direction instead.
+    if (facing.mirrored && sheet.mirrorsFacings) {
         withTransform({
             scale(scaleX = -1f, scaleY = 1f, pivot = Offset(x, top + drawHeight / 2f))
         }) {

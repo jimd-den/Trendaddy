@@ -141,6 +141,15 @@ data class SpriteSheet(
     val clips: List<AnimationClip> = emptyList(),
     /** Present when the sheet has a row per facing; null means one row serves all. */
     val facingRows: Map<SpriteFacing, Int> = emptyMap(),
+    /**
+     * Whether the far side may be drawn by flipping this art.
+     *
+     * True for almost everything, because a mirrored figure reads correctly at
+     * a three-quarter camera and costs nothing. False for art carrying a
+     * readable asymmetry -- a glyph, a banner, lettering on a prop -- where the
+     * flip is immediately legible as a mistake rather than as a second angle.
+     */
+    val mirrorsFacings: Boolean = true,
     val origin: SpriteOrigin = SpriteOrigin.PACK,
 ) {
     val frameCount: Int get() = columns * rows

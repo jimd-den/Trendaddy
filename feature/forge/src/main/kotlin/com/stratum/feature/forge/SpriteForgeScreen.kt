@@ -60,6 +60,8 @@ fun SpriteForgeScreen(
     onOpenSettings: () -> Unit = {},
     onToggleDetails: () -> Unit = {},
     previewFor: (String) -> ImageBitmap? = { null },
+    /** Opens the frame mapper, for fixing a sheet rather than regenerating it. */
+    onMapFrames: () -> Unit = {},
 ) {
     // Re-read the provider on every visit. The view model outlives this screen,
     // so without this a key saved in settings a moment ago is still reported as
@@ -80,6 +82,7 @@ fun SpriteForgeScreen(
         onOpenSettings = onOpenSettings,
         onToggleDetails = viewModel::toggleDetails,
         previewFor = previewFor,
+        onMapFrames = onMapFrames,
     )
 }
 
@@ -97,6 +100,7 @@ fun SpriteForgeContent(
     onOpenSettings: () -> Unit = {},
     onToggleDetails: () -> Unit = {},
     previewFor: (String) -> ImageBitmap? = { null },
+    onMapFrames: () -> Unit = {},
 ) {
     val colors = StratumTheme.colors
 
@@ -124,6 +128,30 @@ fun SpriteForgeContent(
             style = MaterialTheme.typography.bodyMedium,
             color = colors.inkMuted,
         )
+
+        Spacer(Modifier.height(Space.medium))
+
+        // Offered here rather than buried in a menu, because this is the screen
+        // where a sheet turns out wrong. A model will draw good art on a grid
+        // nobody asked for, and regenerating rolls the dice again; mapping the
+        // frames by hand fixes the one that already came back.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Cut wrong, or missing an animation? Map the frames by hand.",
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.inkMuted,
+                modifier = Modifier.weight(1f),
+            )
+            StratumAction(
+                label = "Map frames",
+                onClick = onMapFrames,
+                emphasis = ActionEmphasis.SECONDARY,
+            )
+        }
 
         Spacer(Modifier.height(Space.large))
 

@@ -118,6 +118,40 @@ An unknown generator id is an error rather than a silent fallback. A pack asking
 for something this build does not have should say so, not quietly hand the
 player a different world.
 
+## Why sprites have two models
+
+`SpriteSheet` is a uniform grid read left to right, with each clip a contiguous
+run of cells. That is the right thing to *play* — the renderer cuts a rectangle
+and the playback clock counts — and the wrong thing to *author*. It can only
+describe art that already landed on a perfect grid with the states in the order
+the engine expects, and generated art almost never does. It comes back with a
+border the model drew, three blank cells, two duplicates, one superb attack pose
+and no death frames.
+
+So there is a second model, `SpriteAtlas`, which names frames instead of
+counting them. A clip is a list of frame ids, a frame may appear in several
+clips or none, and a state with no frames is unmapped rather than invalid —
+which is the normal condition of a sheet halfway through being mapped. It also
+carries what the grid could not: a per-frame anchor, a flip, and an on/off flag
+for the cells that are not art.
+
+`AtlasBaker` collapses one into the other. It packs a mapping into an ordinary
+`SpriteSheet` — one clip per row, a frame used twice copied into both, each
+frame hung from its anchor so differently cropped poses share a baseline. The
+renderer, the library, the playback clock and the save format are all untouched
+by hand-mapping: it is something that happened before the asset existed, not
+something the engine carries at runtime.
+
+The split runs through the platform boundary too. Where the frames go is decided
+in `:core:domain` and tested without a bitmap; `SpriteAtlasBaker` in `:core:data`
+only decodes, blits and encodes. That is what makes the interesting question —
+does a walk built from six differently cropped cells line up — answerable by a
+unit test rather than by looking at a phone.
+
+Baking is one-way, so `SpriteProjectStore` keeps the working file: the untouched
+source image beside the mapping. Re-cutting a sheet never destroys the image it
+was cut from.
+
 ## Determinism
 
 The world seed drives one `Random` for the whole session, so a run replays
