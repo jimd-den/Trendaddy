@@ -115,21 +115,27 @@ fun StratumApp(
     // was drawn with whichever hero sheet happened to be newest.
     val spriteResolver = remember(spriteRevision, contentWithSprites, heroClassId) {
         { key: SpriteKey ->
-            val sheet = when (key) {
+            // Candidates in order of preference rather than one guess. The
+            // first choice can resolve to a sheet with no usable image — one
+            // that came back blank, or a pack sheet with no pixels on this
+            // device — and picking it and then drawing nothing is how a
+            // character ends up with no skin and no explanation.
+            val candidates = when (key) {
                 SpriteKey.Player -> {
                     val chosen = heroClassId ?: contentWithSprites.heroClasses.firstOrNull()?.id
-                    chosen?.let(contentWithSprites::sheetForHero)
-                        // A player who has drawn art but assigned none still
-                        // gets to see it, rather than art they made sitting
-                        // unused because they missed a picker.
-                        ?: contentWithSprites.spriteSheets.firstOrNull { it.id.startsWith("hero:") }
+                    // A player who has drawn art but assigned none still gets
+                    // to see it, rather than art they made sitting unused
+                    // because they missed a picker.
+                    listOfNotNull(chosen?.let(contentWithSprites::sheetForHero)) +
+                        contentWithSprites.spriteSheets.filter { it.id.startsWith("hero:") }
                 }
                 is SpriteKey.Monster ->
-                    contentWithSprites.sheetForEnemy(key.definitionId)
-                        ?: contentWithSprites.spriteSheets.firstOrNull { it.id.startsWith("monster:") }
+                    listOfNotNull(contentWithSprites.sheetForEnemy(key.definitionId)) +
+                        contentWithSprites.spriteSheets.filter { it.id.startsWith("monster:") }
             }
-            sheet?.let { found ->
-                ai.sprites.bitmapFor(found.id)?.let { bitmap ->
+
+            candidates.distinctBy { it.id }.firstNotNullOfOrNull { found ->
+                ai.sprites.drawableBitmapFor(found.id)?.let { bitmap ->
                     DrawableSprite(found, bitmap.asImageBitmap())
                 }
             }
@@ -253,7 +259,10 @@ fun StratumApp(
                 modifier = modifier,
                 onBack = { destination = Destination.HOME },
                 onOpenSettings = { destination = Destination.SETTINGS },
-                previewFor = { id -> ai.sprites.bitmapFor(id)?.asImageBitmap() },
+                // The drawable check, so a blank sheet reads as blank here
+                // rather than as an empty rectangle the player has to
+                // interpret.
+                previewFor = { id -> ai.sprites.drawableBitmapFor(id)?.asImageBitmap() },
             )
         }
 

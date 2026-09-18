@@ -397,10 +397,13 @@ private fun SheetRow(
                     Modifier.fillMaxWidth().height(SHEET_PREVIEW_HEIGHT),
                     contentAlignment = Alignment.Center,
                 ) {
+                    // Blank and missing are the same thing from here: there is
+                    // no art, the world will fall back to a shape, and the way
+                    // out of it is the same.
                     Text(
-                        text = "Image missing",
+                        text = "Nothing drawn on this sheet. Delete it and try again.",
                         style = MaterialTheme.typography.labelSmall,
-                        color = colors.inkMuted,
+                        color = colors.danger,
                     )
                 }
             }
