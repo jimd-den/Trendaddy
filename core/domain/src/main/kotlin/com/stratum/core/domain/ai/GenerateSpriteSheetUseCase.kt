@@ -79,8 +79,14 @@ class GenerateSpriteSheetUseCase(
             appendLine("- Consistent size and colours across every frame.")
             appendLine(rows)
             appendLine()
-            appendLine("Background: fully transparent. No scenery, no ground shadow, no drop shadow,")
-            appendLine("no colour fill, no checkerboard. Transparency is required.")
+            // Spelled out because models reliably answer a request for
+            // transparency by *drawing* the grey checkerboard that represents
+            // it in an image editor. Saying "no checkerboard" once is not
+            // enough; naming the mistake is.
+            appendLine("Background: real alpha transparency, not a picture of it.")
+            appendLine("Do NOT draw the grey and white checkerboard pattern that image editors")
+            appendLine("use to show transparency. Do not fill the background with any colour,")
+            appendLine("white or black included. No scenery, no ground shadow, no drop shadow.")
             appendLine("Do not label the frames. Do not draw a grid or guide lines.")
             appendLine("Viewed from a three-quarter overhead angle, as in an isometric game.")
         }

@@ -10,6 +10,7 @@ import com.stratum.core.domain.ai.GenerationAttempt
 import com.stratum.core.domain.ai.GenerationJournal
 import com.stratum.core.domain.ai.GenerationObserver
 import com.stratum.core.domain.ai.GenerationStage
+import com.stratum.core.domain.sprite.KeyStrategy
 import com.stratum.core.domain.sprite.SpriteSheet
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,7 +26,8 @@ import kotlinx.coroutines.launch
  */
 class SpriteForgeViewModel(
     private val generateSheet: GenerateSpriteSheetUseCase,
-    private val saveSheet: (SpriteSheet, ByteArray) -> Unit,
+    /** Saves the sheet and reports how its background was dealt with. */
+    private val saveSheet: (SpriteSheet, ByteArray) -> KeyStrategy,
     private val loadSheets: () -> List<SpriteSheet>,
     private val deleteSheet: (String) -> Unit,
     private val isProviderConfigured: () -> Boolean,
@@ -108,12 +110,13 @@ class SpriteForgeViewModel(
             _state.value = result.fold(
                 onSuccess = { generated ->
                     _state.value = _state.value.copy(stage = GenerationStage.SAVING)
-                    saveSheet(generated.sheet, generated.image.bytes)
+                    val keyed = saveSheet(generated.sheet, generated.image.bytes)
                     _state.value.copy(
                         busy = false,
                         stage = GenerationStage.DONE,
                         sheets = loadSheets(),
                         lastGenerated = generated.sheet,
+                        keyStrategy = keyed,
                         error = null,
                     )
                 },
@@ -148,7 +151,7 @@ class SpriteForgeViewModel(
     companion object {
         fun factory(
             generateSheet: GenerateSpriteSheetUseCase,
-            saveSheet: (SpriteSheet, ByteArray) -> Unit,
+            saveSheet: (SpriteSheet, ByteArray) -> KeyStrategy,
             loadSheets: () -> List<SpriteSheet>,
             deleteSheet: (String) -> Unit,
             isProviderConfigured: () -> Boolean,
@@ -184,6 +187,8 @@ data class SpriteForgeUiState(
     /** The provider call behind the current result, successful or not. */
     val attempt: GenerationAttempt? = null,
     val detailsOpen: Boolean = false,
+    /** How the last sheet's background was dealt with, for the player to see. */
+    val keyStrategy: KeyStrategy? = null,
 ) {
     val progress: Float get() = stage?.fraction ?: 0f
 

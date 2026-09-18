@@ -39,6 +39,7 @@ import com.stratum.core.designsystem.component.StratumPanel
 import com.stratum.core.designsystem.component.StratumWell
 import com.stratum.core.designsystem.theme.Space
 import com.stratum.core.domain.ai.GenerationStage
+import com.stratum.core.domain.sprite.KeyStrategy
 import com.stratum.core.designsystem.theme.safeContent
 import com.stratum.core.designsystem.theme.StratumTheme
 import com.stratum.core.domain.sprite.SpriteSheet
@@ -217,6 +218,26 @@ fun SpriteForgeContent(
                     text = state.error,
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.danger,
+                )
+            }
+        }
+
+        // Models answer a request for transparency by drawing a checkerboard
+        // often enough that the player should be told when we had to undo it.
+        state.keyStrategy?.let { strategy ->
+            val note = when (strategy) {
+                KeyStrategy.CHECKERBOARD ->
+                    "The model drew a checkerboard instead of being transparent. Removed."
+                KeyStrategy.SOLID -> "A solid background was removed."
+                KeyStrategy.ALREADY_TRANSPARENT -> null
+                KeyStrategy.NONE -> "No background could be identified; the sheet was kept as drawn."
+            }
+            note?.let {
+                Spacer(Modifier.height(Space.small))
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (strategy == KeyStrategy.NONE) colors.danger else colors.inkMuted,
                 )
             }
         }

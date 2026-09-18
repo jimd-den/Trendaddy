@@ -46,6 +46,7 @@ import com.stratum.feature.forge.SpriteForgeViewModel
 import com.stratum.feature.hero.ClassForgeScreen
 import com.stratum.feature.hero.ClassForgeViewModel
 import com.stratum.core.data.hero.CustomClassStore
+import com.stratum.core.data.sprite.SpriteBackgroundKeyer
 import com.stratum.core.domain.content.CustomClassPack
 import com.stratum.core.domain.content.HeroClassDefinition
 import com.stratum.core.designsystem.component.StratumChip
@@ -224,8 +225,13 @@ fun StratumApp(
                 factory = SpriteForgeViewModel.factory(
                     generateSheet = ai.generateSpriteSheet,
                     saveSheet = { sheet, bytes ->
-                        ai.sprites.save(sheet, bytes)
+                        // Keyed before it is stored, so a sheet on disk is
+                        // always one the world can draw. Doing it at draw time
+                        // would pay the cost every frame.
+                        val keyed = SpriteBackgroundKeyer.key(bytes)
+                        ai.sprites.save(sheet, keyed.bytes)
                         spriteRevision++
+                        keyed.strategy
                     },
                     loadSheets = ai.sprites::all,
                     deleteSheet = { id ->

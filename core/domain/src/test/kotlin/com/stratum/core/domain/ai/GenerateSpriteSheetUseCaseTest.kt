@@ -104,8 +104,15 @@ class GenerateSpriteSheetUseCaseTest {
         assertTrue(prompt.contains("a storm wisp"))
         assertTrue(prompt.contains("chunky pixel art"))
         assertTrue(prompt.contains("4 columns by 4 rows"))
-        // The single most common failure is an opaque background.
-        assertTrue(prompt.contains("transparent", ignoreCase = true))
+        // The single most common failure is an opaque background, and the
+        // specific way models get it wrong is drawing the checkerboard that
+        // represents transparency. Naming the mistake is the part that works,
+        // so the prompt has to keep doing it.
+        assertTrue(prompt.contains("transparen", ignoreCase = true))
+        assertTrue(
+            prompt.contains("checkerboard", ignoreCase = true),
+            "the prompt stopped naming the checkerboard mistake",
+        )
         assertTrue(model.lastRequest!!.requireTransparency)
     }
 
