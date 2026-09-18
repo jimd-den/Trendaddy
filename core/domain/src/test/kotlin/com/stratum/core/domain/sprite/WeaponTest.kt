@@ -13,14 +13,17 @@ class WeaponPosingTest {
 
     @Test
     fun `a swing goes up behind the shoulder and comes down across the front`() {
-        val windUp = attack(0)
-        val impact = attack(3)
+        val skeleton = Skeleton()
+        val windUp = skeleton.pose(MocapPoses.poseFor(AnimationState.ATTACK, 0, 4))
+        val impact = skeleton.pose(MocapPoses.poseFor(AnimationState.ATTACK, 3, 4))
 
-        // Measured from the weapon as drawn, which is pointing straight up.
-        assertTrue(windUp.rotationDegrees < 0f, "the wind-up did not take the weapon back")
-        assertTrue(impact.rotationDegrees > 0f, "the swing never came down")
-        assertEquals(WeaponLayer.BEHIND, windUp.layer)
-        assertEquals(WeaponLayer.IN_FRONT, impact.layer)
+        // Read off the hand rather than off a rotation, now that the anchor is
+        // the hand: the wind-up raises it above the shoulder and the swing
+        // brings it back down.
+        assertTrue(windUp.require(Joint.HAND_NEAR).y < windUp.require(Joint.SHOULDER_NEAR).y)
+        assertTrue(impact.require(Joint.HAND_NEAR).y > impact.require(Joint.SHOULDER_NEAR).y)
+        assertEquals(WeaponLayer.BEHIND, attack(0).layer)
+        assertEquals(WeaponLayer.IN_FRONT, attack(3).layer)
     }
 
     @Test
@@ -58,21 +61,35 @@ class WeaponPosingTest {
     }
 
     @Test
-    fun `at rest the weapon hangs at the side and behind the body`() {
+    fun `at rest the weapon hangs point down at the side`() {
         val idle = assertNotNull(WeaponPosing.anchorFor(AnimationState.IDLE, 0, 2))
-        assertEquals(WeaponLayer.BEHIND, idle.layer)
-        // Tip down and back rather than up: a character standing about with a
-        // raised sword reads as permanently mid-attack.
-        assertTrue(idle.rotationDegrees > 90f)
+        // Tip down rather than up: a character standing about with a raised
+        // sword reads as permanently mid-attack. 180 is straight down.
+        assertTrue(
+            kotlin.math.abs(idle.rotationDegrees) > 150f,
+            "resting rotation was ${idle.rotationDegrees}",
+        )
+        // In front of the leg, because the hand it hangs from is the near one
+        // and is below the shoulder. Derived, not decided.
+        assertEquals(WeaponLayer.IN_FRONT, idle.layer)
     }
 
     @Test
     fun `a walk carries the weapon without swinging it`() {
         val steps = (0 until 4).map { assertNotNull(WeaponPosing.anchorFor(AnimationState.WALK, it, 4)) }
-        assertTrue(steps.all { it.rotationDegrees == steps.first().rotationDegrees })
-        // It does move, or the weapon looks pinned to the screen while the
-        // character bobs underneath it.
+
+        // It moves with the arm it is held in, rather than being pinned to the
+        // screen while the character bobs underneath it.
         assertTrue(steps.map { it.yFraction }.distinct().size > 1)
+        assertTrue(steps.map { it.rotationDegrees }.distinct().size > 1)
+        // But it stays pointed broadly downward: a weapon that swung through a
+        // walk would read as attacking every other step.
+        // Straight down is 180, and rotations are signed, so "downward" is a
+        // magnitude near 180 rather than a value above some threshold.
+        assertTrue(
+            steps.all { kotlin.math.abs(it.rotationDegrees) > 120f },
+            "a walk swung the weapon up: ${steps.map { it.rotationDegrees }}",
+        )
     }
 
     @Test

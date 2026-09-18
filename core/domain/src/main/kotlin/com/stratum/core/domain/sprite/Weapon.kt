@@ -164,19 +164,19 @@ data class WeaponFit(
 }
 
 /**
- * Where a weapon goes for each pose the pipeline knows how to ask for.
+ * Where a weapon goes, read off the skeleton rather than guessed.
  *
- * Authored rather than derived, for the same reason the pose instructions are:
- * a swing is a known shape. The wind-up takes the weapon back and up behind the
- * shoulder, the strike brings it down and across the front, the recovery
- * carries it low. Working that out from the frames would mean finding a hand in
- * a drawing, which is a harder problem than this is worth — and it would have
- * to be solved again for every character.
+ * This used to be a hand-authored arc: a wind-up at these degrees, a strike at
+ * those, interpolated between. It was wrong, and measurably so — replaying the
+ * renderer's arithmetic over real art put the hand a full hand's width outside
+ * the character, and the correction had to be dialled in per character by eye.
  *
- * The positions are for a figure at a three-quarter isometric angle facing down
- * and to the right, which is the only angle anything here is drawn at. The
- * weapon hand is therefore on the right of the frame and slightly nearer the
- * viewer than the body.
+ * The skeleton removes the guess entirely. A weapon is held in a hand and
+ * points along the forearm; [MocapPoses] already says exactly where the hand is
+ * and which way the forearm runs, for every frame of every animation, because
+ * the same data is what the image model was given to draw the pose from. The
+ * arc is no longer authored twice and reconciled by hand — there is one
+ * skeleton, and the drawing and the weapon both follow it.
  */
 object WeaponPosing {
 
@@ -186,65 +186,37 @@ object WeaponPosing {
      * Null rather than a hidden anchor, so a death that has dropped its weapon
      * simply has none for those frames rather than one drawn at zero scale.
      */
-    fun anchorFor(state: AnimationState, index: Int, frameCount: Int): WeaponAnchor? {
+    fun anchorFor(
+        state: AnimationState,
+        index: Int,
+        frameCount: Int,
+        skeleton: Skeleton = Skeleton(),
+    ): WeaponAnchor? {
         val progress = if (frameCount <= 1) 0f else index.toFloat() / (frameCount - 1)
-        return when (state) {
-            // At rest: hanging at the side, tip down and back.
-            AnimationState.IDLE -> rest(bob = progress * 0.004f)
+        // A corpse still gripping a raised sword is the single most common way
+        // a death animation looks unfinished.
+        if (state == AnimationState.DIE && progress >= DROP_AT) return null
 
-            // Carried, rising and falling a little with the stride.
-            AnimationState.WALK -> rest(bob = 0.012f * kotlin.math.sin(progress * TWO_PI))
-
-            AnimationState.ATTACK -> swing(progress)
-
-            // A skill is held out in front in both hands rather than swung.
-            AnimationState.SPECIAL -> WeaponAnchor(
-                xFraction = 0.5f,
-                yFraction = 0.4f - 0.06f * kotlin.math.sin(progress * PI_F),
-                rotationDegrees = -20f + 30f * progress,
-                scale = 1f + 0.08f * kotlin.math.sin(progress * PI_F),
-                layer = WeaponLayer.IN_FRONT,
-            )
-
-            // Flung wide by the hit, but not let go of.
-            AnimationState.HURT -> WeaponAnchor(
-                xFraction = 0.64f + 0.04f * progress,
-                yFraction = 0.55f,
-                rotationDegrees = 170f + 25f * progress,
-                layer = WeaponLayer.BEHIND,
-            )
-
-            // Tucked in tight against the body through the roll.
-            AnimationState.ROLL -> WeaponAnchor(
-                xFraction = 0.52f,
-                yFraction = 0.55f,
-                rotationDegrees = 150f,
-                scale = 0.95f,
-                layer = WeaponLayer.BEHIND,
-            )
-
-            // Held while falling, dropped once down. A corpse still gripping a
-            // raised sword is the single most common way a death animation
-            // looks unfinished.
-            AnimationState.DIE -> if (progress < DROP_AT) {
-                WeaponAnchor(
-                    xFraction = 0.6f,
-                    yFraction = 0.56f + 0.1f * progress,
-                    rotationDegrees = 150f + 40f * progress,
-                    layer = WeaponLayer.BEHIND,
-                )
-            } else {
-                null
-            }
-        }
+        val pose = skeleton.pose(MocapPoses.poseFor(state, index, frameCount))
+        val grip = pose.weaponGrip()
+        return WeaponAnchor(
+            xFraction = grip.at.x,
+            yFraction = grip.at.y,
+            rotationDegrees = grip.weaponDegrees,
+            layer = layerFor(pose),
+        )
     }
 
     /** Every anchor for a laid-out sheet, ready to hang on it. */
-    fun rigFor(sheet: SpriteSheet, fit: WeaponFit = WeaponFit.none): WeaponRig = WeaponRig(
+    fun rigFor(
+        sheet: SpriteSheet,
+        fit: WeaponFit = WeaponFit.none,
+        skeleton: Skeleton = Skeleton(),
+    ): WeaponRig = WeaponRig(
         buildMap {
             for (clip in sheet.clips) {
                 for (step in 0 until clip.frameCount) {
-                    val anchor = anchorFor(clip.state, step, clip.frameCount) ?: continue
+                    val anchor = anchorFor(clip.state, step, clip.frameCount, skeleton) ?: continue
                     put(clip.firstFrame + step, fit.applyTo(anchor))
                 }
             }
@@ -252,66 +224,21 @@ object WeaponPosing {
     )
 
     /**
-     * Hanging at the side, which is where a weapon spends most of its life.
+     * Which side of the body the weapon passes, from where the hand is.
      *
-     * Nearer the body than the first attempt. Hands sit closer to the centre
-     * line than they look like they do: measured on a generated figure the
-     * fist was at 0.47 across, where this had been placing the weapon at 0.68 —
-     * a hand's width outside the character entirely.
+     * A hand raised above its own shoulder is drawn back over the body — the
+     * top of a wind-up, an overhead guard — and the weapon belongs behind the
+     * figure there. Once the hand drops below the shoulder the swing is coming
+     * across the front, and so is the blade. Getting this backwards is
+     * instantly legible as wrong even to someone who could not say why, and
+     * reading it from the pose means it can never disagree with the drawing.
      */
-    private fun rest(bob: Float) = WeaponAnchor(
-        xFraction = 0.6f,
-        yFraction = 0.54f + bob,
-        rotationDegrees = 155f,
-        layer = WeaponLayer.BEHIND,
-    )
-
-    /**
-     * The arc of a swing, in four beats.
-     *
-     * Interpolated rather than tabulated so it reads the same whether the
-     * attack came back as four frames or as six. The shape is what matters: up
-     * and behind, then down and across, then low in front.
-     */
-    private fun swing(progress: Float): WeaponAnchor {
-        val degrees = lerp(WIND_UP_DEGREES, FOLLOW_THROUGH_DEGREES, ease(progress))
-        // Crosses to the front of the body once it is past the shoulder, which
-        // is the moment the swing stops being a wind-up and starts being a hit.
-        val layer = if (degrees < CROSSES_AT) WeaponLayer.BEHIND else WeaponLayer.IN_FRONT
-        return WeaponAnchor(
-            // Hands stay near the centre line through a swing; they do not
-            // travel nearly as far across the body as they appear to.
-            xFraction = lerp(0.55f, 0.44f, progress),
-            yFraction = lerp(0.24f, 0.5f, ease(progress)),
-            rotationDegrees = degrees,
-            scale = 1f + 0.1f * kotlin.math.sin(progress * PI_F),
-            layer = layer,
-        )
+    private fun layerFor(pose: Pose): WeaponLayer {
+        val hand = pose.require(Joint.weaponHand)
+        val shoulder = pose.require(Joint.SHOULDER_NEAR)
+        return if (hand.y < shoulder.y) WeaponLayer.BEHIND else WeaponLayer.IN_FRONT
     }
-
-    /**
-     * Slow at the top, fast through the middle.
-     *
-     * A swing drawn at a constant rate reads as a machine. The weight of a
-     * blade is entirely in how long it hangs at the top of the wind-up and how
-     * fast it crosses the bottom.
-     */
-    private fun ease(t: Float): Float = t * t * (3f - 2f * t)
-
-    private fun lerp(from: Float, to: Float, t: Float) = from + (to - from) * t
-
-    /** Behind the shoulder at the top of the wind-up. */
-    private const val WIND_UP_DEGREES = -130f
-
-    /** Low across the body at the end of the follow-through. */
-    private const val FOLLOW_THROUGH_DEGREES = 110f
-
-    /** Past this the weapon is in front of the body rather than behind it. */
-    private const val CROSSES_AT = -20f
 
     /** How far into a death the weapon leaves the hand. */
     private const val DROP_AT = 0.5f
-
-    private const val PI_F = 3.1415927f
-    private const val TWO_PI = 2f * PI_F
 }

@@ -39,6 +39,16 @@ data class PoseFrameRequest(
     /** The reference pose. The same one for every frame, never the previous frame. */
     val reference: ImageReference,
     val step: PoseStep,
+    /**
+     * A stick figure of the pose, when there is one.
+     *
+     * Optional because a set generated before the guides existed must still be
+     * resumable, and because a provider that only accepts one input image can
+     * still be given the character. The prose instruction is kept either way —
+     * it is what a model falls back on when it does not follow the drawing, and
+     * the two agree because both are generated from the same skeleton.
+     */
+    val guide: ImageReference? = null,
     val styleDirection: String = "",
     val canvas: Int = BasePoseRequest.DEFAULT_CANVAS,
     val modelId: String? = null,
@@ -141,7 +151,10 @@ class GeneratePoseFrameUseCase(
                 width = request.canvas,
                 height = request.canvas,
                 requireTransparency = true,
-                references = listOf(request.reference),
+                // Character first, guide second, and the prompt names them in
+                // that order. An image editor handed two pictures with no word
+                // about which is which will cheerfully redraw the stick figure.
+                references = listOfNotNull(request.reference, request.guide),
             ),
             observer,
         ).getOrElse { return Result.failure(it) }
@@ -164,9 +177,30 @@ class GeneratePoseFrameUseCase(
      * that differs between them reads as flicker rather than as an improvement.
      */
     private fun buildPrompt(request: PoseFrameRequest): String = buildString {
-        appendLine("Redraw the character in the attached image in a new pose.")
-        appendLine()
-        appendLine("New pose: ${request.step.instruction}.")
+        if (request.guide != null) {
+            appendLine("Two images are attached.")
+            appendLine("IMAGE 1 is the character. IMAGE 2 is a stick figure diagram of a pose.")
+            appendLine()
+            appendLine("Redraw the character from IMAGE 1 standing in the pose drawn in IMAGE 2.")
+            appendLine()
+            // The failure this is guarding against is not subtle: a model given
+            // a line drawing and no explanation will sometimes return the line
+            // drawing, tidied up.
+            appendLine("IMAGE 2 is a diagram, not art. Do not draw a stick figure. Do not copy")
+            appendLine("its lines, its white background or its black dots. Use it only to place")
+            appendLine("the character's head, arms, hands, legs and feet.")
+            appendLine()
+            appendLine("Match IMAGE 2 exactly: the same limb angles, the same bend at every")
+            appendLine("elbow and knee, the same lean of the body, the same height off the")
+            appendLine("ground. The large dot marks the hand that holds a weapon; close that")
+            appendLine("hand into a grip.")
+            appendLine()
+            appendLine("In words, the pose is: ${request.step.instruction}.")
+        } else {
+            appendLine("Redraw the character in the attached image in a new pose.")
+            appendLine()
+            appendLine("New pose: ${request.step.instruction}.")
+        }
         appendLine()
         // Its own paragraph, in capitals. Asked politely as one bullet among
         // nine -- "the same camera: viewed from the same angle" -- every model
@@ -176,7 +210,7 @@ class GeneratePoseFrameUseCase(
         // animation, they are a flicker, so this is the one worth shouting.
         appendLine(IsometricCamera.holdClause)
         appendLine()
-        appendLine("Keep identical to the attached image:")
+        appendLine("Keep identical to the character in IMAGE 1:")
         appendLine("- The same character. Same face, same build, same proportions.")
         appendLine("- The same colours, exactly. Same palette, same shading, same outline.")
         appendLine("- The same equipment, armour and clothing, unchanged in every detail.")

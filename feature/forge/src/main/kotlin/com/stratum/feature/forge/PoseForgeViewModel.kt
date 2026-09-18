@@ -37,6 +37,14 @@ import kotlinx.coroutines.withContext
 class PoseForgeViewModel(
     private val drawReference: suspend (BasePoseRequest, GenerationObserver) -> Result<GeneratedImage>,
     private val drawPose: suspend (PoseFrameRequest, GenerationObserver) -> Result<GeneratedImage>,
+    /**
+     * A stick figure of the pose, handed to the model alongside the character.
+     *
+     * Null when a guide cannot be drawn, which is survivable: the prose
+     * instruction still describes the pose, and the two agree because both come
+     * from the same skeleton.
+     */
+    private val guideFor: (PoseStep) -> ImageReference?,
     private val saveReference: (String, ByteArray) -> Unit,
     private val loadReference: (String) -> ByteArray?,
     /** Cheap enough to ask on every keystroke, unlike reading the file. */
@@ -186,6 +194,7 @@ class PoseForgeViewModel(
                         PoseFrameRequest(
                             reference = reference,
                             step = step,
+                            guide = guideFor(step),
                             styleDirection = _state.value.style,
                         ),
                         GenerationObserver.None,
@@ -337,6 +346,7 @@ class PoseForgeViewModel(
         fun factory(
             drawReference: suspend (BasePoseRequest, GenerationObserver) -> Result<GeneratedImage>,
             drawPose: suspend (PoseFrameRequest, GenerationObserver) -> Result<GeneratedImage>,
+            guideFor: (PoseStep) -> ImageReference?,
             saveReference: (String, ByteArray) -> Unit,
             loadReference: (String) -> ByteArray?,
             hasReference: (String) -> Boolean,
@@ -348,8 +358,8 @@ class PoseForgeViewModel(
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T = PoseForgeViewModel(
-                drawReference, drawPose, saveReference, loadReference, hasReference, savePose,
-                dropPose, posesDrawn, composeSheet, isProviderConfigured,
+                drawReference, drawPose, guideFor, saveReference, loadReference, hasReference,
+                savePose, dropPose, posesDrawn, composeSheet, isProviderConfigured,
             ) as T
         }
     }

@@ -54,11 +54,16 @@ import com.stratum.feature.hero.ClassForgeViewModel
 import com.stratum.core.data.hero.CustomClassStore
 import android.graphics.BitmapFactory
 import com.stratum.core.data.sprite.GeneratedSheetPreparer
+import com.stratum.core.data.sprite.PoseGuideRenderer
 import com.stratum.core.data.sprite.PoseSheetComposer
 import com.stratum.core.data.sprite.WeaponPreparer
 import com.stratum.core.data.sprite.SpriteAtlasBaker
 import com.stratum.core.domain.sprite.SheetPreparation
 import com.stratum.core.domain.sprite.SpriteMapper
+import com.stratum.core.domain.ai.ImageReference
+import com.stratum.core.domain.ai.PoseScript
+import com.stratum.core.domain.sprite.MocapPoses
+import com.stratum.core.domain.sprite.Skeleton
 import com.stratum.core.domain.sprite.WeaponPosing
 import com.stratum.core.domain.sprite.WeaponRig
 import com.stratum.core.domain.content.CustomClassPack
@@ -325,6 +330,18 @@ fun StratumApp(
                         ai.generateBasePose(request, observer)
                     },
                     drawPose = { request, observer -> ai.generatePoseFrame(request, observer) },
+                    guideFor = { step ->
+                        // The same skeleton the weapon rig reads, drawn. One
+                        // source of truth for where the body is, so the art and
+                        // the sword can never disagree about it.
+                        val angles = MocapPoses.poseFor(
+                            state = step.state,
+                            index = step.index,
+                            frameCount = PoseScript.posesFor(step.state).size,
+                        )
+                        PoseGuideRenderer.render(Skeleton().pose(angles))
+                            ?.let { ImageReference(it) }
+                    },
                     saveReference = ai.poses::saveReference,
                     loadReference = ai.poses::reference,
                     hasReference = ai.poses::hasReference,

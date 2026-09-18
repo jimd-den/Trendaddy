@@ -204,6 +204,42 @@ Models answer a request for alpha by *drawing* the editor checkerboard at least
 as often as they return a real alpha channel, and a drawn checkerboard is
 unrecoverable; a flat colour is unambiguous to produce and trivial to key out.
 
+## Why there is a skeleton
+
+Prose is a poor way to specify a body. "Right leg forward with the heel
+touching the ground, left arm swung forward" is unambiguous to a person and
+merely suggestive to an image model — measured, an attack described that way
+came back as a cross-body guard. A drawing of the pose is not suggestive.
+
+So `MocapPoses` holds every pose as joint angles, `Skeleton` resolves them to
+positions by ordinary forward kinematics, and `PoseGuideRenderer` draws the
+result as a stick figure that rides alongside the character reference. Angles
+rather than coordinates, because bone lengths are then fixed: no authored pose
+can stretch a forearm, and a guide with wrong proportions teaches the model
+wrong proportions. The prose instruction is still sent, generated from the same
+skeleton, so the two can never disagree about what frame three of a walk is.
+
+The second reason is the one that pays for it. A weapon is held in a hand and
+points along a forearm, and a skeleton knows exactly where both are.
+`WeaponPosing` used to author that arc separately and reconcile it by eye;
+replaying the renderer's arithmetic over real art found the authored hand a full
+hand's width outside the character. Now the anchor *is* the hand joint and the
+rotation *is* the forearm direction, from the same data the model was given to
+draw the pose from. The drawing and the sword cannot disagree, because there is
+only one skeleton.
+
+Two conventions meet here and the conversion lives in exactly one function.
+Limbs are authored anticlockwise from straight down, because that is what reads
+naturally when writing a pose — an arm out to the near side is +90. Weapon
+rotation is clockwise from straight up, because that is what the renderer's
+`rotate()` does to a weapon drawn pointing up. Opposite handedness from
+different zeroes, so the conversion is a reflection rather than an offset.
+
+Joints are named near and far rather than left and right. Everything is drawn at
+one three-quarter camera, so one side is always closer to the viewer; naming
+them that way means a pose never has to be rewritten when the character mirrors,
+and the weapon stays in the hand the viewer can see.
+
 ## Why weapons are not drawn on characters
 
 A sword drawn into a character belongs to that character forever. It cannot be
