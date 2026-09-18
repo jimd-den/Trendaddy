@@ -47,6 +47,9 @@ import com.stratum.core.designsystem.theme.Space
 import com.stratum.core.designsystem.theme.Stroke
 import com.stratum.core.designsystem.theme.StratumTheme
 import com.stratum.core.designsystem.theme.safeContent
+import com.stratum.core.domain.ai.PoseStep
+import com.stratum.core.domain.sprite.PoseGuideMode
+import com.stratum.core.domain.sprite.PoseGuideStyle
 import com.stratum.core.domain.sprite.SpriteValidation
 
 /**
@@ -75,6 +78,8 @@ fun PoseForgeScreen(
     modifier: Modifier = Modifier,
     onBack: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    /** Asks the host to pick a pose file for this step. */
+    onImportPose: (PoseStep) -> Unit = {},
     /** The reference drawing, decoded once per character. */
     referenceFor: (String) -> ImageBitmap? = { null },
     /** The packed sheet, once there is one. */
@@ -108,6 +113,10 @@ fun PoseForgeScreen(
         onStop = viewModel::stop,
         onBuildSheet = viewModel::buildSheet,
         onRedrawPose = viewModel::redrawPose,
+        onImportPose = onImportPose,
+        onGuideModeChange = viewModel::selectGuideMode,
+        onGuideStyleChange = viewModel::selectGuideStyle,
+        onClearImported = viewModel::clearImported,
         onDismiss = viewModel::dismissMessage,
         onBack = onBack,
         onOpenSettings = onOpenSettings,
@@ -129,6 +138,10 @@ fun PoseForgeContent(
     onStop: () -> Unit = {},
     onBuildSheet: () -> Unit = {},
     onRedrawPose: (String) -> Unit = {},
+    onGuideModeChange: (PoseGuideMode) -> Unit = {},
+    onGuideStyleChange: (PoseGuideStyle) -> Unit = {},
+    onClearImported: (PoseStep) -> Unit = {},
+    onImportPose: (PoseStep) -> Unit = {},
     onDismiss: () -> Unit = {},
     onBack: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
@@ -187,7 +200,10 @@ fun PoseForgeContent(
         ReferencePanel(state, reference, onDrawReference)
 
         Spacer(Modifier.height(Space.medium))
-        AnimationPanel(state, onBuildAnimations, onStop, onRedrawPose)
+        GuidePanel(state, onGuideModeChange, onGuideStyleChange)
+
+        Spacer(Modifier.height(Space.medium))
+        AnimationPanel(state, onBuildAnimations, onStop, onRedrawPose, onImportPose, onClearImported)
 
         Spacer(Modifier.height(Space.medium))
         SheetPanel(state, sheetImage, onCellSizeChange, onBuildSheet)
@@ -314,12 +330,99 @@ private fun ReferencePanel(
     }
 }
 
+/**
+ * Where the poses come from, and how they are drawn.
+ *
+ * Both sources stay because neither is strictly better. The built-in skeletons
+ * know this game's camera, its frame counts and which hand holds the weapon; a
+ * pose library knows real anatomy, observed from photographs, in far greater
+ * quantity than anyone here is going to author. Words alone stays too, because
+ * it is the only mode that works with a provider accepting one input image.
+ */
+@Composable
+private fun GuidePanel(
+    state: PoseForgeUiState,
+    onGuideModeChange: (PoseGuideMode) -> Unit,
+    onGuideStyleChange: (PoseGuideStyle) -> Unit,
+) {
+    val colors = StratumTheme.colors
+
+    StratumSection(
+        title = "Pose guides",
+        subtitle = "A drawing of the pose alongside the character. Prose is a poor way to " +
+            "specify a body.",
+    ) {
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(Space.small),
+        ) {
+            PoseGuideMode.entries.forEach { mode ->
+                StratumChip(
+                    label = mode.label,
+                    selected = state.guides.mode == mode,
+                    onClick = { onGuideModeChange(mode) },
+                )
+            }
+        }
+
+        if (state.guides.mode != PoseGuideMode.NONE) {
+            Spacer(Modifier.height(Space.small))
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(Space.small),
+            ) {
+                Text(
+                    text = "Drawn as",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.inkMuted,
+                )
+                PoseGuideStyle.entries.forEach { style ->
+                    StratumChip(
+                        label = style.label,
+                        selected = state.guides.style == style,
+                        onClick = { onGuideStyleChange(style) },
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(Space.small))
+        Text(
+            text = when (state.guides.mode) {
+                PoseGuideMode.NONE ->
+                    "Only the written instruction is sent. The weapon still gets rigged from " +
+                        "the built-in skeleton."
+                PoseGuideMode.BUILT_IN ->
+                    "The built-in skeletons, which know this camera and which hand holds the " +
+                        "weapon."
+                PoseGuideMode.IMPORTED ->
+                    "${state.importedCount} of ${state.total} frames have an imported pose. " +
+                        "The rest fall back to the built-in one."
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.inkMuted,
+        )
+
+        if (state.guides.style == PoseGuideStyle.OPENPOSE) {
+            Spacer(Modifier.height(Space.small))
+            Text(
+                text = "The canonical OpenPose rendering: coloured limbs on black. Every model " +
+                    "trained alongside a ControlNet preprocessor has seen this exact palette.",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkMuted,
+            )
+        }
+    }
+}
+
 @Composable
 private fun AnimationPanel(
     state: PoseForgeUiState,
     onBuildAnimations: () -> Unit,
     onStop: () -> Unit,
     onRedrawPose: (String) -> Unit,
+    onImportPose: (PoseStep) -> Unit = {},
+    onClearImported: (PoseStep) -> Unit = {},
 ) {
     val colors = StratumTheme.colors
 
@@ -354,14 +457,23 @@ private fun AnimationPanel(
                 Row(horizontalArrangement = Arrangement.spacedBy(Space.tight)) {
                     steps.forEach { step ->
                         PoseDot(
-                            label = "${step.index + 1}",
+                            label = "${step.index + 1}" + if (state.isImported(step)) "*" else "",
                             drawn = step.key in state.drawn,
                             failed = step.key in state.failures,
                             active = state.currentStep?.key == step.key,
-                            // Tapping a drawn pose throws it away, which is how
-                            // one bad frame out of forty gets fixed without
-                            // redrawing the other thirty-nine.
-                            onClick = { if (step.key in state.drawn) onRedrawPose(step.key) },
+                            // In imported mode a tap picks a pose file for the
+                            // frame; otherwise it throws the drawing away, which
+                            // is how one bad frame out of forty gets fixed
+                            // without redrawing the other thirty-nine.
+                            onClick = {
+                                when {
+                                    state.guides.mode == PoseGuideMode.IMPORTED &&
+                                        state.isImported(step) -> onClearImported(step)
+                                    state.guides.mode == PoseGuideMode.IMPORTED ->
+                                        onImportPose(step)
+                                    step.key in state.drawn -> onRedrawPose(step.key)
+                                }
+                            },
                         )
                     }
                 }

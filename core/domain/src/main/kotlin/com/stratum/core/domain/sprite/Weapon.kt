@@ -190,14 +190,19 @@ object WeaponPosing {
         state: AnimationState,
         index: Int,
         frameCount: Int,
-        skeleton: Skeleton = Skeleton(),
+        // The same source the guide was drawn from, so a character posed
+        // against an imported skeleton is rigged against that one too. Rigging
+        // against the built-in set while the art followed an imported pose puts
+        // the sword where the hand is not, which is the bug the skeleton exists
+        // to remove.
+        guides: PoseGuides = PoseGuides(),
     ): WeaponAnchor? {
         val progress = if (frameCount <= 1) 0f else index.toFloat() / (frameCount - 1)
         // A corpse still gripping a raised sword is the single most common way
         // a death animation looks unfinished.
         if (state == AnimationState.DIE && progress >= DROP_AT) return null
 
-        val pose = skeleton.pose(MocapPoses.poseFor(state, index, frameCount))
+        val pose = guides.riggingPoseFor(state, index, frameCount)
         val grip = pose.weaponGrip()
         return WeaponAnchor(
             xFraction = grip.at.x,
@@ -211,12 +216,12 @@ object WeaponPosing {
     fun rigFor(
         sheet: SpriteSheet,
         fit: WeaponFit = WeaponFit.none,
-        skeleton: Skeleton = Skeleton(),
+        guides: PoseGuides = PoseGuides(),
     ): WeaponRig = WeaponRig(
         buildMap {
             for (clip in sheet.clips) {
                 for (step in 0 until clip.frameCount) {
-                    val anchor = anchorFor(clip.state, step, clip.frameCount, skeleton) ?: continue
+                    val anchor = anchorFor(clip.state, step, clip.frameCount, guides) ?: continue
                     put(clip.firstFrame + step, fit.applyTo(anchor))
                 }
             }

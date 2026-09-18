@@ -12,6 +12,11 @@ import com.stratum.core.domain.ai.PoseScript
 import com.stratum.core.domain.ai.PoseStep
 import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.sprite.PackedSheet
+import com.stratum.core.domain.sprite.Pose
+import com.stratum.core.domain.sprite.PoseCell
+import com.stratum.core.domain.sprite.PoseGuideMode
+import com.stratum.core.domain.sprite.PoseGuideStyle
+import com.stratum.core.domain.sprite.PoseGuides
 import com.stratum.core.domain.sprite.PoseSheetPlan
 import com.stratum.core.domain.sprite.PoseSheetPlanner
 import com.stratum.core.domain.sprite.SpriteSheet
@@ -44,7 +49,13 @@ class PoseForgeViewModel(
      * instruction still describes the pose, and the two agree because both come
      * from the same skeleton.
      */
-    private val guideFor: (PoseStep) -> ImageReference?,
+    private val guideFor: (PoseStep, PoseGuides) -> ImageReference?,
+    /** Reads an OpenPose skeleton out of a downloaded PNG, when it can. */
+    private val readGuideImage: (ByteArray) -> Pose?,
+    /** Reads OpenPose keypoints out of pasted JSON. */
+    private val readGuideJson: (String) -> Pose?,
+    private val loadGuides: (String) -> PoseGuides,
+    private val saveGuides: (String, PoseGuides) -> Unit,
     private val saveReference: (String, ByteArray) -> Unit,
     private val loadReference: (String) -> ByteArray?,
     /** Cheap enough to ask on every keystroke, unlike reading the file. */
@@ -84,8 +95,64 @@ class PoseForgeViewModel(
             // and the reference is a megabyte.
             hasReference = setId?.let(hasReference) ?: false,
             drawn = setId?.let(posesDrawn).orEmpty(),
+            // A character's poses travel with it: what its art was drawn
+            // against is what its weapon must be rigged against.
+            guides = setId?.let(loadGuides) ?: PoseGuides(),
             savedSheet = null,
         )
+    }
+
+    // ---- where the poses come from ---------------------------------------
+
+    fun selectGuideMode(mode: PoseGuideMode) = updateGuides { it.copy(mode = mode) }
+
+    fun selectGuideStyle(style: PoseGuideStyle) = updateGuides { it.copy(style = style) }
+
+    /**
+     * Takes a skeleton out of a downloaded pose PNG.
+     *
+     * What pose libraries actually hand you is the rendered skeleton, not its
+     * keypoints — so the picture is read back to find the joints. It can fail,
+     * and saying so matters: without joints the image is still a perfectly good
+     * guide for the drawing, but the weapon has nothing to hang from.
+     */
+    fun importGuideImage(step: PoseStep, bytes: ByteArray) {
+        val pose = readGuideImage(bytes)
+        if (pose == null) {
+            _state.value = _state.value.copy(
+                error = "No OpenPose skeleton could be found in that image. It has to be the " +
+                    "coloured skeleton itself, not a photograph or a rendered character.",
+            )
+            return
+        }
+        acceptImported(step, pose)
+    }
+
+    fun importGuideJson(step: PoseStep, text: String) {
+        val pose = readGuideJson(text)
+        if (pose == null) {
+            _state.value = _state.value.copy(
+                error = "That is not an OpenPose file, or it has no wrist on the weapon side.",
+            )
+            return
+        }
+        acceptImported(step, pose)
+    }
+
+    fun clearImported(step: PoseStep) = updateGuides { it.withoutImported(step.key) }
+
+    private fun acceptImported(step: PoseStep, pose: Pose) {
+        updateGuides { it.withImported(step.key, pose) }
+        _state.value = _state.value.copy(
+            message = "Pose imported for ${step.key}. Redraw that frame to use it.",
+            error = null,
+        )
+    }
+
+    private fun updateGuides(change: (PoseGuides) -> PoseGuides) {
+        val next = change(_state.value.guides)
+        _state.value.setId?.let { saveGuides(it, next) }
+        _state.value = _state.value.copy(guides = next)
     }
 
     fun updateStyle(style: String) {
@@ -194,7 +261,7 @@ class PoseForgeViewModel(
                         PoseFrameRequest(
                             reference = reference,
                             step = step,
-                            guide = guideFor(step),
+                            guide = guideFor(step, _state.value.guides),
                             styleDirection = _state.value.style,
                         ),
                         GenerationObserver.None,
@@ -346,7 +413,11 @@ class PoseForgeViewModel(
         fun factory(
             drawReference: suspend (BasePoseRequest, GenerationObserver) -> Result<GeneratedImage>,
             drawPose: suspend (PoseFrameRequest, GenerationObserver) -> Result<GeneratedImage>,
-            guideFor: (PoseStep) -> ImageReference?,
+            guideFor: (PoseStep, PoseGuides) -> ImageReference?,
+            readGuideImage: (ByteArray) -> Pose?,
+            readGuideJson: (String) -> Pose?,
+            loadGuides: (String) -> PoseGuides,
+            saveGuides: (String, PoseGuides) -> Unit,
             saveReference: (String, ByteArray) -> Unit,
             loadReference: (String) -> ByteArray?,
             hasReference: (String) -> Boolean,
@@ -358,8 +429,9 @@ class PoseForgeViewModel(
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T = PoseForgeViewModel(
-                drawReference, drawPose, guideFor, saveReference, loadReference, hasReference,
-                savePose, dropPose, posesDrawn, composeSheet, isProviderConfigured,
+                drawReference, drawPose, guideFor, readGuideImage, readGuideJson, loadGuides,
+                saveGuides, saveReference, loadReference, hasReference, savePose, dropPose,
+                posesDrawn, composeSheet, isProviderConfigured,
             ) as T
         }
     }
@@ -390,8 +462,15 @@ data class PoseForgeUiState(
     val providerConfigured: Boolean = false,
     val message: String? = null,
     val error: String? = null,
+    /** Which poses this character is drawn against, and how they are drawn. */
+    val guides: PoseGuides = PoseGuides(),
 ) {
     val script: PoseScript get() = scope.script
+
+    /** Steps with an imported pose behind them rather than a built-in one. */
+    fun isImported(step: PoseStep): Boolean = step.key in guides.imported
+
+    val importedCount: Int get() = script.steps.count { it.key in guides.imported }
 
     val total: Int get() = script.steps.size
 

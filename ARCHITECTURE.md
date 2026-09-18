@@ -240,6 +240,60 @@ one three-quarter camera, so one side is always closer to the viewer; naming
 them that way means a pose never has to be rewritten when the character mirrors,
 and the weapon stays in the hand the viewer can see.
 
+## Why both pose sources stay
+
+A pose library is a far larger and better-observed body of work than anything
+authored here: real anatomy, taken from photographs, in quantity. What it cannot
+know is this game's camera, its frame counts, or which hand holds the weapon.
+So `PoseGuides` keeps three modes rather than picking a winner — the built-in
+skeletons, imported OpenPose poses, and words alone, which is the only mode that
+works with a provider accepting one input image and the mode every pose set
+generated before guides existed was drawn under.
+
+Imports fall back per frame, not wholesale. Filling a library set is a frame at
+a time — someone finds a good wind-up and a good impact and has nothing for the
+recovery — and a gap that disabled the guide would make a partly-imported set
+worse than either pure source.
+
+What ties it together is that the weapon rig reads the same object. A character
+generated against an imported skeleton is rigged against that skeleton, which is
+why `PoseGuideStore` keeps them per character: rigging against the built-in set
+while the art followed an imported pose hangs the sword where the drawing did
+not put the hand, which is precisely the bug the skeleton was introduced to
+remove.
+
+## What OpenPose support actually involves
+
+Three separate things, because the format is three things in practice.
+
+**JSON keypoints.** `OpenPoseJson` reads what the ecosystem emits, which is not
+one schema but OpenPose's own output plus a dozen tools that each kept the parts
+they needed — a `people` array, a bare `keypoints` array, coordinate pairs with
+no confidence, pixels with a named canvas and pixels without one. Two layouts
+are in circulation and they are incompatible: BODY_18 has a neck, BODY_17 does
+not and must derive one from the shoulders. Read with the wrong layout a file
+does not fail, it produces a person whose elbows are where their hips were.
+
+**Rendered PNGs.** What a pose library actually hands you is the skeleton
+already drawn, ready for a ControlNet preprocessor. That file is a perfectly
+good guide as it is, and for generation nothing more is needed — but the weapon
+needs to know where the hand is, so `OpenPoseImageReader` reads the picture
+back. OpenPose draws each joint as an opaque disc in one of eighteen fixed
+palette colours; finding the discs gives the keypoints back. Limbs share that
+palette, so the largest *compact* blob is taken rather than the centroid of
+everything matching — a disc fills most of its bounding box and a limb fills
+almost none of one. Best-effort, and the result carries a confidence because a
+limb lying along its own colour can still be misread.
+
+**The canonical rendering.** `OpenPoseStyle` reproduces the palette and limb
+order exactly, so a pose authored here drops into that ecosystem unchanged.
+Interoperability that only reads is half a feature.
+
+The conversion that matters is the one nobody writes down: OpenPose names sides
+from the subject, this engine names them from the camera. Which of the subject's
+sides is nearer depends on which way they face, so it is a parameter rather than
+an assumption — get it wrong and the sword is in the hand the viewer cannot see.
+
 ## Why weapons are not drawn on characters
 
 A sword drawn into a character belongs to that character forever. It cannot be

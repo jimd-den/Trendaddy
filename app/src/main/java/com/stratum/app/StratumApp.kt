@@ -1,5 +1,8 @@
 package com.stratum.app
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -62,7 +65,11 @@ import com.stratum.core.domain.sprite.SheetPreparation
 import com.stratum.core.domain.sprite.SpriteMapper
 import com.stratum.core.domain.ai.ImageReference
 import com.stratum.core.domain.ai.PoseScript
-import com.stratum.core.domain.sprite.MocapPoses
+import com.stratum.core.domain.ai.PoseStep
+import com.stratum.core.domain.sprite.OpenPoseImageReader
+import com.stratum.core.domain.sprite.OpenPoseImport
+import com.stratum.core.domain.sprite.OpenPoseJson
+import com.stratum.core.domain.sprite.PoseGuides
 import com.stratum.core.domain.sprite.Skeleton
 import com.stratum.core.domain.sprite.WeaponPosing
 import com.stratum.core.domain.sprite.WeaponRig
@@ -183,7 +190,14 @@ fun StratumApp(
                                 sprite = held.first,
                                 image = held.second,
                                 rig = rigs.getOrPut(found.id) {
-                                    WeaponPosing.rigFor(found, ai.weaponFits.fitFor(found.id))
+                                    WeaponPosing.rigFor(
+                                        sheet = found,
+                                        fit = ai.weaponFits.fitFor(found.id),
+                                        // The poses the art was drawn against.
+                                        // Rigging against anything else hangs
+                                        // the sword off a hand that is not there.
+                                        guides = ai.poseGuides.guidesFor(found.id),
+                                    )
                                 },
                             )
                         } else {
@@ -330,17 +344,46 @@ fun StratumApp(
                         ai.generateBasePose(request, observer)
                     },
                     drawPose = { request, observer -> ai.generatePoseFrame(request, observer) },
-                    guideFor = { step ->
+                    guideFor = { step, guides ->
                         // The same skeleton the weapon rig reads, drawn. One
                         // source of truth for where the body is, so the art and
                         // the sword can never disagree about it.
-                        val angles = MocapPoses.poseFor(
+                        guides.poseFor(
                             state = step.state,
                             index = step.index,
                             frameCount = PoseScript.posesFor(step.state).size,
-                        )
-                        PoseGuideRenderer.render(Skeleton().pose(angles))
-                            ?.let { ImageReference(it) }
+                        )?.let { pose ->
+                            PoseGuideRenderer.render(pose, style = guides.style)
+                                ?.let { ImageReference(it) }
+                        }
+                    },
+                    readGuideImage = { bytes ->
+                        // Pose libraries ship the rendered skeleton, not its
+                        // keypoints, so the picture is read back to find the
+                        // joints the weapon needs.
+                        val bitmap = SpriteAtlasBaker.decode(bytes)
+                        val pose = bitmap?.let {
+                            val found = OpenPoseImageReader.read(
+                                pixels = SpriteAtlasBaker.pixelsOf(it),
+                                width = it.width,
+                                height = it.height,
+                            )
+                            it.recycle()
+                            found?.let(OpenPoseImport::toPose)
+                        }
+                        pose?.let(OpenPoseImport::normalised)
+                    },
+                    readGuideJson = { text ->
+                        OpenPoseJson.parse(text)
+                            ?.let(OpenPoseImport::toPose)
+                            ?.let(OpenPoseImport::normalised)
+                    },
+                    loadGuides = ai.poseGuides::guidesFor,
+                    saveGuides = { setId, guides ->
+                        ai.poseGuides.save(setId, guides)
+                        // The resolver caches rigs, so a changed pose source has
+                        // to rebuild them or the sword keeps the old hand.
+                        spriteRevision++
                     },
                     saveReference = ai.poses::saveReference,
                     loadReference = ai.poses::reference,
@@ -364,9 +407,32 @@ fun StratumApp(
                     isProviderConfigured = ai::isConfigured,
                 ),
             )
+            // Which frame an imported pose is destined for. The picker hands
+            // back a Uri and nothing else, so the step has to be remembered
+            // across the trip out to the system and back.
+            var importingStep by remember { mutableStateOf<PoseStep?>(null) }
+            val poseFilePicker = rememberLauncherForActivityResult(
+                ActivityResultContracts.PickVisualMedia(),
+            ) { uri ->
+                val step = importingStep
+                importingStep = null
+                if (uri != null && step != null) {
+                    val bytes = runCatching {
+                        context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    }.getOrNull()
+                    if (bytes != null) poseViewModel.importGuideImage(step, bytes)
+                }
+            }
+
             PoseForgeScreen(
                 viewModel = poseViewModel,
                 modifier = modifier,
+                onImportPose = { step ->
+                    importingStep = step
+                    poseFilePicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                    )
+                },
                 onBack = { destination = Destination.SPRITES },
                 onOpenSettings = { destination = Destination.SETTINGS },
                 referenceFor = { setId ->

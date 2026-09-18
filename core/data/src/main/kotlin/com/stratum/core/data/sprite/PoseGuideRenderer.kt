@@ -7,6 +7,10 @@ import android.graphics.Paint
 import com.stratum.core.domain.sprite.BoneWeight
 import com.stratum.core.domain.sprite.Joint
 import com.stratum.core.domain.sprite.Pose
+import com.stratum.core.domain.sprite.BodySide
+import com.stratum.core.domain.sprite.OpenPoseExport
+import com.stratum.core.domain.sprite.OpenPoseStyle
+import com.stratum.core.domain.sprite.PoseGuideStyle
 import com.stratum.core.domain.sprite.Skeleton
 import java.io.ByteArrayOutputStream
 
@@ -27,7 +31,67 @@ import java.io.ByteArrayOutputStream
  */
 object PoseGuideRenderer {
 
-    fun render(pose: Pose, size: Int = GUIDE_SIZE): ByteArray? {
+    fun render(
+        pose: Pose,
+        size: Int = GUIDE_SIZE,
+        style: PoseGuideStyle = PoseGuideStyle.DIAGRAM,
+    ): ByteArray? = when (style) {
+        PoseGuideStyle.DIAGRAM -> diagram(pose, size)
+        PoseGuideStyle.OPENPOSE -> openPose(pose, size)
+    }
+
+    /**
+     * The canonical OpenPose rendering: coloured limbs on black.
+     *
+     * Worth reproducing exactly rather than approximately. Every ControlNet
+     * preprocessor and every model trained alongside one has seen this specific
+     * palette in this specific layout; a skeleton in different colours is a
+     * picture of a skeleton rather than a control signal. It also means a pose
+     * authored here drops into that ecosystem unchanged, which is the half of
+     * interoperability people forget to build.
+     */
+    private fun openPose(pose: Pose, size: Int): ByteArray? {
+        if (size <= 0) return null
+        val bitmap = runCatching {
+            Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        }.getOrNull() ?: return null
+
+        val canvas = Canvas(bitmap)
+        canvas.drawColor(Color.BLACK)
+        val body = OpenPoseExport.fromPose(pose, nearSide = BodySide.RIGHT)
+
+        val limbPaint = Paint().apply {
+            isAntiAlias = true
+            strokeCap = Paint.Cap.ROUND
+            style = Paint.Style.STROKE
+            strokeWidth = size * OPENPOSE_LIMB
+        }
+        OpenPoseStyle.limbs.forEachIndexed { index, (from, to) ->
+            val a = body[from] ?: return@forEachIndexed
+            val b = body[to] ?: return@forEachIndexed
+            limbPaint.color = OpenPoseStyle.limbColor(index)
+            canvas.drawLine(a.x * size, a.y * size, b.x * size, b.y * size, limbPaint)
+        }
+
+        // Joints on top and fully opaque, which is also what makes them
+        // findable again when a rendered skeleton is read back in.
+        val jointPaint = Paint().apply {
+            isAntiAlias = true
+            style = Paint.Style.FILL
+        }
+        body.keypoints.forEach { (joint, point) ->
+            if (!point.isPresent) return@forEach
+            jointPaint.color = OpenPoseStyle.colorFor(joint)
+            canvas.drawCircle(point.x * size, point.y * size, size * OPENPOSE_JOINT, jointPaint)
+        }
+
+        val out = ByteArrayOutputStream()
+        val ok = bitmap.compress(Bitmap.CompressFormat.PNG, PNG_QUALITY, out)
+        bitmap.recycle()
+        return if (ok) out.toByteArray() else null
+    }
+
+    private fun diagram(pose: Pose, size: Int): ByteArray? {
         if (size <= 0) return null
         val bitmap = runCatching {
             Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
@@ -89,6 +153,8 @@ object PoseGuideRenderer {
     const val GUIDE_SIZE = 512
 
     private const val LIMB_WIDTH = 0.018f
+    private const val OPENPOSE_LIMB = 0.016f
+    private const val OPENPOSE_JOINT = 0.012f
     private const val TORSO_WIDTH = 0.032f
     private const val HEAD_RADIUS = 0.052f
     private const val HAND_RADIUS = 0.022f
