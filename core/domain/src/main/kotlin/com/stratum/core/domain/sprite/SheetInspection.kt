@@ -57,6 +57,15 @@ data class SheetPreparation(
     val sheet: SpriteSheet,
     val keyStrategy: KeyStrategy,
     val grid: GridVerdict,
+    /**
+     * Almost nothing is drawn on the sheet.
+     *
+     * Worth saying out loud, because the way it presents in the world is a
+     * character that simply is not there — the shape the renderer falls back to
+     * and no explanation. A player seeing that has no way to tell an empty
+     * generation from a broken game.
+     */
+    val looksEmpty: Boolean = false,
 )
 
 /**

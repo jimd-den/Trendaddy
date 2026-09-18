@@ -97,40 +97,63 @@ object SpriteKeying {
         // it can be cleared wherever it appears — including the gaps a flood
         // fill from the edge would never reach, like between a pair of legs.
         if (looksLikeCheckerboard(dominant)) {
-            var cleared = 0
-            for (i in out.indices) {
-                if (dominant.any { near(out[i], it, tolerance) }) {
-                    out[i] = out[i] and RGB_MASK
-                    cleared++
-                }
-            }
-            return KeyResult(out, KeyStrategy.CHECKERBOARD, cleared)
+            val cleared = clearEverywhere(out, dominant, tolerance)
+            return survivorsOf(pixels, out, KeyStrategy.CHECKERBOARD, cleared)
         }
 
         // A colour that surrounds every frame is the canvas. Clearing it
         // wherever it appears is then safe in the way the checkerboard is, and
         // reaches the pockets a flood cannot: between the legs, inside the ring
         // of an arm, through the eye of an axe.
-        // The trade this makes: a character drawn in the canvas's own colour
-        // loses any pocket of it enclosed by its own outline. That is the same
-        // trade the checkerboard rule makes, and it is the right way round —
-        // a hole in one frame is a blemish, a backdrop on every frame is a
-        // sprite that cannot be used at all.
-        val isCanvas = cells != null &&
-            cells.cells > 1 &&
-            bordersEveryCell(pixels, width, height, cells, dominant, tolerance)
-
-        val cleared = if (isCanvas) {
-            clearEverywhere(out, dominant, tolerance)
+        //
+        // Judged one colour at a time, never as a set. The border of a dense
+        // sheet is not always one colour — figures touch the edges of their
+        // cells — so the second colour taken from it is quite often the
+        // character's own. Asking whether the *pair* frames every cell lets
+        // that colour in on the backdrop's evidence, and clearing it globally
+        // then erases the character from every frame at once.
+        //
+        // The trade the rule does make: a character drawn in the canvas's own
+        // colour loses any pocket of it enclosed by its own outline. That is
+        // the same trade the checkerboard rule makes, and it is the right way
+        // round — a hole in one frame is a blemish, a backdrop on every frame
+        // is a sprite that cannot be used at all.
+        val canvas = if (cells != null && cells.cells > 1) {
+            dominant.filter { framesEveryCell(pixels, width, height, cells, it, tolerance) }
         } else {
-            // Otherwise it might be shared with the character, so only what is
-            // connected to the outside goes.
-            floodFromEdges(out, width, height, dominant, tolerance)
+            emptyList()
         }
-        return if (cleared > 0) {
-            KeyResult(out, KeyStrategy.SOLID, cleared)
+
+        var cleared = clearEverywhere(out, canvas, tolerance)
+        // Whatever is left of the backdrop but was not proved to be canvas
+        // still goes if it is connected to the outside. Running second lets the
+        // flood travel through what the canvas pass already cleared.
+        cleared += floodFromEdges(out, width, height, dominant, tolerance)
+
+        return survivorsOf(pixels, out, KeyStrategy.SOLID, cleared)
+    }
+
+    /**
+     * Accepts a keyed result only if a sprite survived it.
+     *
+     * The failure this catches is total: a colour misjudged as backdrop takes
+     * the character with it, and what reaches the world is a fully transparent
+     * sheet that draws as nothing at all. That is far worse than the background
+     * it was trying to remove, and unlike a background it gives the player
+     * nothing to look at and no way to guess why.
+     */
+    private fun survivorsOf(
+        original: IntArray,
+        keyed: IntArray,
+        strategy: KeyStrategy,
+        cleared: Int,
+    ): KeyResult {
+        if (cleared <= 0) return KeyResult(original, KeyStrategy.NONE, 0)
+        val surviving = keyed.count { alphaOf(it) > 0 }
+        return if (surviving < keyed.size * MIN_SURVIVING) {
+            KeyResult(original, KeyStrategy.NONE, 0)
         } else {
-            KeyResult(pixels, KeyStrategy.NONE, 0)
+            KeyResult(keyed, strategy, cleared)
         }
     }
 
@@ -189,18 +212,18 @@ object SpriteKeying {
     )
 
     /**
-     * Whether [background] frames the inside of essentially every cell.
+     * Whether one colour frames the inside of essentially every cell.
      *
      * Sampled a little inside the cell, not on its boundary: a model that drew
      * frame borders puts a line exactly there, and a ring one pixel wide would
      * measure the line rather than what it encloses.
      */
-    private fun bordersEveryCell(
+    private fun framesEveryCell(
         pixels: IntArray,
         width: Int,
         height: Int,
         cells: SheetGrid,
-        background: List<Int>,
+        background: Int,
         tolerance: Int,
     ): Boolean {
         val cellWidth = width / cells.columns
@@ -222,7 +245,7 @@ object SpriteKeying {
 
                 fun sample(index: Int) {
                     sampled++
-                    if (background.any { near(pixels[index], it, tolerance) }) matched++
+                    if (near(pixels[index], background, tolerance)) matched++
                 }
                 for (x in left until right) {
                     sample(top * width + x)
@@ -239,6 +262,7 @@ object SpriteKeying {
     }
 
     private fun clearEverywhere(out: IntArray, background: List<Int>, tolerance: Int): Int {
+        if (background.isEmpty()) return 0
         var cleared = 0
         for (i in out.indices) {
             if (alphaOf(out[i]) > 0 && background.any { near(out[i], it, tolerance) }) {
@@ -348,4 +372,11 @@ object SpriteKeying {
     private const val MIN_CELL = 8
     /** The share of every cell's inner ring a colour must hold to be the canvas. */
     private const val CANVAS_COVERAGE = 0.8f
+    /**
+     * Below this share of the sheet still opaque, keying ate the sprite.
+     *
+     * Deliberately generous: even a sheet of thin line-art figures covers far
+     * more than this, and the case being caught is a sheet cleared to nothing.
+     */
+    private const val MIN_SURVIVING = 0.005f
 }

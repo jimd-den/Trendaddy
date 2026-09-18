@@ -135,7 +135,16 @@ class SpriteForgeViewModel(
                         // on the one it drew.
                         lastGenerated = prepared.sheet,
                         keyStrategy = prepared.keyStrategy,
-                        gridNote = prepared.grid.takeIf { it.outcome != GridOutcome.AS_ASKED }?.summary,
+                        gridNote = when {
+                            // Said first, because an empty sheet makes every
+                            // other observation about it beside the point.
+                            prepared.looksEmpty ->
+                                "The model returned an all but blank image — there is nothing " +
+                                    "to draw, so the world will keep showing the fallback shape. " +
+                                    "Try again, or a different model."
+                            prepared.grid.outcome != GridOutcome.AS_ASKED -> prepared.grid.summary
+                            else -> null
+                        },
                         error = null,
                     )
                 },

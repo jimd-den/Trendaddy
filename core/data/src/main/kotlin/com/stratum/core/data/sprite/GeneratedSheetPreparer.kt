@@ -19,6 +19,8 @@ data class PreparedSheet(
     val keyStrategy: KeyStrategy,
     val clearedPixels: Int,
     val grid: GridVerdict,
+    /** Almost nothing is drawn on it, so the world would show no character. */
+    val looksEmpty: Boolean = false,
 ) {
     override fun equals(other: Any?): Boolean =
         this === other ||
@@ -91,16 +93,38 @@ object GeneratedSheetPreparer {
             SpriteKeying.key(pixels, width, height, cells = verdict.grid),
         )
 
+        val empty = looksEmpty(best.pixels)
+
         // Nothing was cleared: re-encoding would only re-compress the same
         // pixels, so the original bytes are kept.
         if (!best.cleared) {
-            return PreparedSheet(cut, bytes, best.strategy, 0, verdict)
+            return PreparedSheet(cut, bytes, best.strategy, 0, verdict, empty)
         }
 
         val encoded = encode(best.pixels, width, height)
-            ?: return PreparedSheet(cut, bytes, KeyStrategy.NONE, 0, verdict)
+            ?: return PreparedSheet(cut, bytes, KeyStrategy.NONE, 0, verdict, empty)
 
-        return PreparedSheet(cut, encoded, best.strategy, best.clearedPixels, verdict)
+        return PreparedSheet(cut, encoded, best.strategy, best.clearedPixels, verdict, empty)
+    }
+
+    /**
+     * Whether there is any sprite left to draw.
+     *
+     * Keying refuses to hand back a sheet it emptied, so this is the other
+     * case: a model that returned a blank or near-blank image. Either way the
+     * world would draw the fallback shape and say nothing, which is the one
+     * outcome a player cannot diagnose.
+     */
+    private fun looksEmpty(pixels: IntArray): Boolean {
+        var opaque = 0
+        val enough = (pixels.size * MIN_DRAWN).toInt()
+        for (pixel in pixels) {
+            if ((pixel ushr 24) and 0xFF > 0) {
+                opaque++
+                if (opaque > enough) return false
+            }
+        }
+        return true
     }
 
     /**
@@ -136,6 +160,9 @@ object GeneratedSheetPreparer {
             0f,
         ),
     )
+
+    /** Below this share of the sheet drawn on, there is no character to see. */
+    private const val MIN_DRAWN = 0.005f
 
     private fun decodeOptions() = BitmapFactory.Options().apply {
         inPreferredConfig = Bitmap.Config.ARGB_8888

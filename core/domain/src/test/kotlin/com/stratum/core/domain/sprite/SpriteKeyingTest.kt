@@ -223,4 +223,52 @@ class SpriteKeyingTest {
         val survivors = keyed.pixels.count { (it ushr 24) and 0xFF > 0 }
         assertEquals(16 * 16, survivors, "the flood ate into the character")
     }
+
+    @Test
+    fun `a character colour taken from the border does not get cleared everywhere`() {
+        // The border of a dense sheet is not one colour: figures touch the edge
+        // of their cells, so the second colour read off it is often the
+        // character's own. Judging the pair together would let that colour in
+        // on the backdrop's evidence and erase the character from every frame.
+        val size = 60
+        val white = 0xFFFFFFFF.toInt()
+        val rust = 0xFFB4502A.toInt()
+        val pixels = IntArray(size * size) { white }
+
+        // A 3x3 grid. Each figure fills its cell edge to edge vertically, so
+        // rust appears all along the top and bottom of the image.
+        for (cellY in 0 until 3) {
+            for (cellX in 0 until 3) {
+                for (y in cellY * 20 until (cellY + 1) * 20) {
+                    for (x in cellX * 20 + 6 until cellX * 20 + 14) {
+                        pixels[y * size + x] = rust
+                    }
+                }
+            }
+        }
+
+        val keyed = SpriteKeying.key(pixels, size, size, cells = SheetGrid(3, 3))
+
+        val survivors = keyed.pixels.count { (it ushr 24) and 0xFF > 0 }
+        assertEquals(9 * 8 * 20, survivors, "the figures were cleared along with the canvas")
+    }
+
+    @Test
+    fun `keying that would leave nothing at all is refused`() {
+        // The backstop. Whatever the reasoning, a fully transparent sheet draws
+        // as nothing in the world and tells the player nothing about why — far
+        // worse than the background it was trying to remove.
+        val size = 40
+        val white = 0xFFFFFFFF.toInt()
+        val pixels = IntArray(size * size) { white }
+
+        val keyed = SpriteKeying.key(pixels, size, size, cells = SheetGrid(2, 2))
+
+        assertEquals(KeyStrategy.NONE, keyed.strategy)
+        assertEquals(0, keyed.clearedPixels)
+        assertTrue(
+            keyed.pixels.all { (it ushr 24) and 0xFF > 0 },
+            "an empty sheet was handed on as if it had been keyed",
+        )
+    }
 }

@@ -233,7 +233,12 @@ fun StratumApp(
                         val prepared = GeneratedSheetPreparer.prepare(sheet, bytes)
                         ai.sprites.save(prepared.sheet, prepared.bytes)
                         spriteRevision++
-                        SheetPreparation(prepared.sheet, prepared.keyStrategy, prepared.grid)
+                        SheetPreparation(
+                            prepared.sheet,
+                            prepared.keyStrategy,
+                            prepared.grid,
+                            prepared.looksEmpty,
+                        )
                     },
                     loadSheets = ai.sprites::all,
                     deleteSheet = { id ->
