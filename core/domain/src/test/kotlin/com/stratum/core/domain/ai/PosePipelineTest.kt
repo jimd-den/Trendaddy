@@ -247,6 +247,43 @@ class PoseFrameGenerationTest {
     }
 
     @Test
+    fun `the camera is nailed down, because every model tested turned the figure sideways`() =
+        runTest {
+            val model = RecordingImageModel()
+            GeneratePoseFrameUseCase(model)(
+                PoseFrameRequest(
+                    reference = reference,
+                    step = PoseScript.full().stepsFor(AnimationState.WALK).first(),
+                ),
+            ).getOrThrow()
+
+            val prompt = model.requests.single().prompt
+            // Asked politely as one bullet among nine, this was ignored by
+            // every model: a pose described in legs and arms reads as a request
+            // for the angle that shows legs and arms best.
+            assertTrue("THE CAMERA DOES NOT MOVE" in prompt, prompt)
+            assertTrue("Do not draw a profile or side view" in prompt, prompt)
+        }
+
+    @Test
+    fun `carried things are named separately from worn things`() = runTest {
+        // A weapon hanging at the hip disappeared when the pose changed: a held
+        // object reads as part of the pose rather than part of the character,
+        // and gets dropped along with the old pose.
+        val model = RecordingImageModel()
+        GeneratePoseFrameUseCase(model)(
+            PoseFrameRequest(
+                reference = reference,
+                step = PoseScript.full().stepsFor(AnimationState.ATTACK).first(),
+            ),
+        ).getOrThrow()
+
+        val prompt = model.requests.single().prompt
+        assertTrue("Everything the character holds or carries" in prompt, prompt)
+        assertTrue("still held or worn here" in prompt, prompt)
+    }
+
+    @Test
     fun `frames are never chained off each other`() = runTest {
         // Editing frame two from frame one and three from two compounds the
         // drift until the character is somebody else. Every frame comes off the

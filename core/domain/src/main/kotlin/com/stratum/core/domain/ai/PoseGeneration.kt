@@ -162,13 +162,31 @@ class GeneratePoseFrameUseCase(
         appendLine()
         appendLine("New pose: ${request.step.instruction}.")
         appendLine()
+        // Its own paragraph, in capitals, stated four ways. Asked politely as
+        // one bullet among nine -- "the same camera: viewed from the same angle"
+        // -- every model tested turned the character to a profile view, because
+        // a pose described in terms of legs and arms reads as a request for the
+        // angle that shows legs and arms best. Frames that alternate between
+        // front and side are not an animation, they are a flicker, so this is
+        // the one instruction worth shouting.
+        appendLine("THE CAMERA DOES NOT MOVE. The character is seen from exactly the same")
+        appendLine("direction as in the attached image. Do not turn the character sideways.")
+        appendLine("Do not draw a profile or side view. Do not change the eye level. Only the")
+        appendLine("body's pose changes; the viewpoint is fixed.")
+        appendLine()
         appendLine("Keep identical to the attached image:")
         appendLine("- The same character. Same face, same build, same proportions.")
         appendLine("- The same colours, exactly. Same palette, same shading, same outline.")
-        appendLine("- The same equipment, armour, clothing and weapon, unchanged in every detail.")
+        appendLine("- The same equipment, armour and clothing, unchanged in every detail.")
+        // Carried things need naming separately from worn things. A weapon
+        // hanging at the hip in the reference simply disappeared when the pose
+        // changed: the model reads a held object as part of the pose rather
+        // than as part of the character, and drops it along with the old pose.
+        appendLine("- Everything the character holds or carries. A weapon held or worn in the")
+        appendLine("  attached image is still held or worn here: the same weapon, the same")
+        appendLine("  shape, the same size.")
         appendLine("- The same art style and the same line weight.")
         appendLine("- The same scale: the figure occupies the same height on the canvas.")
-        appendLine("- The same camera: viewed from the same angle and the same eye level.")
         appendLine()
         appendLine("Change only the pose of the body. Do not redesign, upgrade, restyle or")
         appendLine("reinterpret the character. Do not add effects, motion blur, speed lines,")

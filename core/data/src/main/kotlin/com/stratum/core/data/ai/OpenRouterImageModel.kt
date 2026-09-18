@@ -66,7 +66,6 @@ class OpenRouterImageModel(
                         model = model,
                         prompt = request.prompt,
                         n = 1,
-                        size = "${request.width}x${request.height}",
                         response_format = "b64_json",
                     ),
                 )
@@ -294,12 +293,22 @@ class OpenRouterImageModel(
     }
 }
 
+/**
+ * No `size`.
+ *
+ * It looks like the obvious field to set and it is a trap. Providers round the
+ * requested size to whatever they actually produce, so it was never load
+ * bearing -- the returned image is measured rather than trusted, precisely
+ * because of that. But a size a provider will not accept is not rounded, it is
+ * refused: 512x512 comes back as a flat HTTP 400 from Google, which turns "an
+ * image of a slightly different size" into "no image at all". Asking for
+ * nothing and measuring what arrives cannot fail that way.
+ */
 @JsonClass(generateAdapter = true)
 internal data class ImageRequestDto(
     val model: String,
     val prompt: String,
     val n: Int,
-    val size: String,
     val response_format: String,
 )
 

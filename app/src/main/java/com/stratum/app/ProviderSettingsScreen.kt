@@ -109,14 +109,18 @@ fun ProviderSettingsScreen(
                 label = { Text("Image model") },
                 placeholder = { Text("google/gemini-2.5-flash-image") },
                 // The pose forge hands the model a picture and asks for it
-                // back in a new pose, which a text-to-image model cannot do at
-                // all -- it fails on every one of forty frames. Worth naming
-                // here rather than leaving to be discovered one generation at
-                // a time.
+                // back in a new pose, so the model must accept an image as
+                // input -- a text-to-image model fails on every one of forty
+                // frames. Named here rather than left to be discovered one
+                // generation at a time. Both of these were measured against a
+                // real character: they hold the camera angle, keep the weapon
+                // and key out cleanly.
                 supportingText = {
                     Text(
-                        "Draws sprite sheets. For the pose forge it must also accept an image " +
-                            "as input, like qwen/qwen3-image-pro or google/gemini-2.5-flash-image.",
+                        "Draws sprite sheets and poses. It must accept an image as input. " +
+                            "google/gemini-2.5-flash-image is the safe choice (square 1024px, " +
+                            "~$0.039 an image); google/gemini-3.1-flash-lite-image is cheaper " +
+                            "and faster (~$0.034, non-square output).",
                     )
                 },
                 singleLine = true,

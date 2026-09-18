@@ -88,7 +88,7 @@ object SpriteKeying {
         }
 
         val border = borderColors(pixels, width, height)
-        val dominant = dominantColors(border)
+        val dominant = dominantColors(border, tolerance)
         if (dominant.isEmpty()) return KeyResult(pixels, KeyStrategy.NONE, 0)
 
         val out = pixels.copyOf()
@@ -183,22 +183,54 @@ object SpriteKeying {
      * The few colours that make up most of the border, quantised so that noise
      * and compression do not split one backdrop into a hundred shades.
      */
-    private fun dominantColors(border: List<Int>): List<Int> {
+    private fun dominantColors(border: List<Int>, tolerance: Int): List<Int> {
         if (border.isEmpty()) return emptyList()
         val buckets = HashMap<Int, Int>()
         border.forEach { buckets[quantise(it)] = (buckets[quantise(it)] ?: 0) + 1 }
 
-        val ranked = buckets.entries.sortedByDescending { it.value }
+        val ranked = merged(buckets, tolerance)
         val chosen = mutableListOf<Int>()
         var covered = 0
         for (entry in ranked) {
             if (chosen.size >= MAX_BACKGROUND_COLORS) break
-            chosen += entry.key
-            covered += entry.value
+            chosen += entry.first
+            covered += entry.second
             if (covered >= border.size * BORDER_COVERAGE) break
         }
         // A border that is mostly the subject is not a background to key out.
         return if (covered >= border.size * BORDER_COVERAGE) chosen else emptyList()
+    }
+
+    /**
+     * Buckets that are the same colour, counted as the same colour.
+     *
+     * Quantising alone assumes a flat backdrop lands in one bucket, which is
+     * true of a PNG and false of a JPEG. Some providers return JPEG whatever
+     * was asked for, and its ringing scatters one flat chroma green across half
+     * a dozen neighbouring buckets -- measured at 37% in the largest where the
+     * same image as PNG gives 100%. The backdrop then falls under the coverage
+     * bar and nothing is keyed at all, so the sprite arrives wearing its
+     * background and the character cannot be used.
+     *
+     * Merging is by the same tolerance the flood fill already uses, so this
+     * admits nothing the clearing step would not have taken anyway. Shades a
+     * step apart join; the two greys of a checkerboard are far further apart
+     * than that and stay separate, which is what keeps that rule working.
+     */
+    private fun merged(buckets: Map<Int, Int>, tolerance: Int): List<Pair<Int, Int>> {
+        val ranked = buckets.entries.sortedByDescending { it.value }
+        val heads = mutableListOf<Pair<Int, Int>>()
+        for (entry in ranked) {
+            // Heaviest first, so a merged group is named by its densest shade
+            // rather than by whichever fringe bucket happened to be seen first.
+            val at = heads.indexOfFirst { near(it.first, entry.key, tolerance) }
+            if (at < 0) {
+                heads += entry.key to entry.value
+            } else {
+                heads[at] = heads[at].first to (heads[at].second + entry.value)
+            }
+        }
+        return heads.sortedByDescending { it.second }
     }
 
     private fun floodFromEdges(

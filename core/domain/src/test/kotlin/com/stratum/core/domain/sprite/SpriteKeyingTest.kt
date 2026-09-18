@@ -272,3 +272,60 @@ class SpriteKeyingTest {
         )
     }
 }
+
+/**
+ * A backdrop that compression has split into several shades.
+ *
+ * Measured, not imagined: a provider returning JPEG instead of PNG scattered
+ * one flat chroma green across seven neighbouring quantise buckets, the largest
+ * holding 37% of the border where the same image as PNG held 100%. The backdrop
+ * fell under the coverage bar, nothing was keyed, and the sprite arrived wearing
+ * its background.
+ */
+class NoisyBackdropKeyingTest {
+
+    private val width = 64
+    private val height = 64
+
+    /** A flat colour, jittered per pixel the way lossy compression jitters one. */
+    private fun noisyBackdrop(base: Int, jitter: Int): IntArray {
+        val pixels = IntArray(width * height)
+        var seed = 12345
+        for (i in pixels.indices) {
+            seed = seed * 1103515245 + 12345
+            fun wobble(shift: Int): Int {
+                val channel = (base ushr shift) and 0xFF
+                val delta = ((seed ushr (shift + 4)) % (2 * jitter + 1)) - jitter
+                return (channel + delta).coerceIn(0, 255)
+            }
+            pixels[i] = (0xFF shl 24) or (wobble(16) shl 16) or (wobble(8) shl 8) or wobble(0)
+        }
+        // A subject in the middle, well away from the backdrop's colour.
+        for (y in 20 until 44) for (x in 20 until 44) pixels[y * width + x] = SUBJECT
+        return pixels
+    }
+
+    @Test
+    fun `a compressed flat backdrop is still one colour`() {
+        val keyed = SpriteKeying.key(noisyBackdrop(GREEN, jitter = 12), width, height)
+
+        assertEquals(KeyStrategy.SOLID, keyed.strategy)
+        assertTrue(keyed.clearedPixels > 0, "the backdrop survived, so the sprite wears it")
+        // The subject is untouched: merging shades of the backdrop must not
+        // reach a colour nothing like it.
+        assertEquals(SUBJECT, keyed.pixels[32 * width + 32])
+    }
+
+    @Test
+    fun `a clean flat backdrop is unaffected by the merge`() {
+        val keyed = SpriteKeying.key(noisyBackdrop(GREEN, jitter = 0), width, height)
+
+        assertEquals(KeyStrategy.SOLID, keyed.strategy)
+        assertTrue(keyed.clearedPixels > width * height / 2)
+    }
+
+    private companion object {
+        const val GREEN = 0xFF20E010.toInt()
+        const val SUBJECT = 0xFFB07840.toInt()
+    }
+}
