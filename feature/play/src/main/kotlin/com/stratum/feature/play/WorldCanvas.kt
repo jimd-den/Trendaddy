@@ -11,6 +11,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.ImageBitmap
@@ -414,15 +415,34 @@ private fun DrawScope.drawSprite(
     val left = (x - drawWidth / 2f).toInt()
     val top = (y - drawHeight + projection.tileHeight * projection.zoom * 0.25f).toInt()
 
-    drawImage(
-        image = sprite.image,
-        srcOffset = IntOffset(rect.left, rect.top),
-        srcSize = IntSize(rect.width, rect.height),
-        dstOffset = IntOffset(left, top),
-        dstSize = IntSize(drawWidth.toInt(), drawHeight.toInt()),
-        filterQuality = FilterQuality.None,
-        alpha = 1f,
-    )
+    // A generated sheet reliably holds one facing, not four. Mirroring buys the
+    // other side for nothing and reads correctly at this camera angle, which is
+    // more dependable than asking a model for four consistent angles.
+    if (facing.mirrored) {
+        withTransform({
+            scale(scaleX = -1f, scaleY = 1f, pivot = Offset(x, top + drawHeight / 2f))
+        }) {
+            drawImage(
+                image = sprite.image,
+                srcOffset = IntOffset(rect.left, rect.top),
+                srcSize = IntSize(rect.width, rect.height),
+                dstOffset = IntOffset(left, top),
+                dstSize = IntSize(drawWidth.toInt(), drawHeight.toInt()),
+                filterQuality = FilterQuality.None,
+                alpha = 1f,
+            )
+        }
+    } else {
+        drawImage(
+            image = sprite.image,
+            srcOffset = IntOffset(rect.left, rect.top),
+            srcSize = IntSize(rect.width, rect.height),
+            dstOffset = IntOffset(left, top),
+            dstSize = IntSize(drawWidth.toInt(), drawHeight.toInt()),
+            filterQuality = FilterQuality.None,
+            alpha = 1f,
+        )
+    }
 
     if (flash > 0f) {
         drawImage(

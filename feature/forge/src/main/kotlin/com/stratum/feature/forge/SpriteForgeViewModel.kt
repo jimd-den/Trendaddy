@@ -170,8 +170,11 @@ class SpriteForgeViewModel(
  * frames is the single most effective way to get usable art out of it.
  */
 enum class SpriteTarget(val label: String, val namespace: String, val layout: SheetLayout) {
-    HERO("Hero", "hero", SheetLayout.standard()),
-    MONSTER("Monster", "monster", SheetLayout.simple()),
+    /** The character you play. Worth the denser sheet and the extra frames. */
+    HERO("Hero", "hero", SheetLayout.detailed()),
+
+    /** A monster fights and dies; it does not need a signature power. */
+    MONSTER("Monster", "monster", SheetLayout.standard()),
 }
 
 data class SpriteForgeUiState(

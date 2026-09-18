@@ -124,7 +124,27 @@ class GenerateSpriteSheetUseCaseTest {
         val prompt = model.lastRequest!!.prompt
         assertTrue(prompt.contains("Row 1"))
         assertTrue(prompt.contains("walk cycle"))
-        assertTrue(prompt.contains("swinging an attack"))
+        assertTrue(prompt.contains("basic attack"))
+    }
+
+    @Test
+    fun `a detailed sheet asks for the special to look unlike the basic attack`() = runTest {
+        // The whole point of a separate special row: a power that reads the same
+        // as an ordinary swing means the resource it cost bought nothing you can
+        // see. So the prompt has to distinguish the two rows, not just list them.
+        val model = FakeImageModel(Result.success(image(384, 448)))
+        val result = GenerateSpriteSheetUseCase(model)(
+            SpriteSheetRequest(subject = "a warrior", layout = SheetLayout.detailed()),
+        ).getOrThrow()
+
+        val prompt = model.lastRequest!!.prompt
+        assertTrue(prompt.contains("6 columns by 7 rows"))
+        assertTrue(prompt.contains("basic attack"))
+        assertTrue(
+            prompt.contains("signature power"),
+            "the special row stopped being described apart from the basic attack",
+        )
+        assertTrue(result.sheet.clips.any { it.state == AnimationState.SPECIAL })
     }
 
     @Test

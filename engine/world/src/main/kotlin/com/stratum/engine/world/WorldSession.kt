@@ -84,6 +84,13 @@ class WorldSession(
     /** Seconds left of an actor's attack animation, so a swing is not instant. */
     private val attackHolds = HashMap<String, Float>()
 
+    /**
+     * Seconds left of a *skill* animation. Kept apart from [attackHolds] so a
+     * power does not look like an ordinary swing — if the two read the same,
+     * the resource you spent bought nothing you can see.
+     */
+    private val castHolds = HashMap<String, Float>()
+
     fun animationFor(actorId: String): AnimationPlayback =
         playbacks[actorId] ?: AnimationPlayback()
 
@@ -447,6 +454,7 @@ class WorldSession(
             cooldowns = player.cooldowns.started(skill),
         )
         attackHolds[PLAYER_ACTOR_ID] = ATTACK_ANIMATION_HOLD
+        castHolds[PLAYER_ACTOR_ID] = ATTACK_ANIMATION_HOLD
         return applyOutcome(outcome, skill)
     }
 
@@ -684,6 +692,7 @@ class WorldSession(
         feedbackLog.clear()
         hitFlashes.clear()
         attackHolds.clear()
+        castHolds.clear()
         playbacks.clear()
 
         // Monsters that had cornered the player do not get to greet them at the
@@ -803,11 +812,13 @@ class WorldSession(
     }
 
     private fun advanceAttackHolds(deltaSeconds: Float) {
-        val iterator = attackHolds.entries.iterator()
-        while (iterator.hasNext()) {
-            val entry = iterator.next()
-            val remaining = entry.value - deltaSeconds
-            if (remaining <= 0f) iterator.remove() else entry.setValue(remaining)
+        listOf(attackHolds, castHolds).forEach { holds ->
+            val iterator = holds.entries.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                val remaining = entry.value - deltaSeconds
+                if (remaining <= 0f) iterator.remove() else entry.setValue(remaining)
+            }
         }
     }
 
@@ -826,6 +837,7 @@ class WorldSession(
             isRolling = isRolling,
             wasHitRecently = hitFlashes.intensity(PLAYER_ACTOR_ID) > 0f,
             isAttacking = attackHolds.containsKey(PLAYER_ACTOR_ID),
+            isCasting = castHolds.containsKey(PLAYER_ACTOR_ID),
             isMoving = motion.input != WorldPoint.ZERO,
         )
         playbacks[PLAYER_ACTOR_ID] = animate(PLAYER_ACTOR_ID, playerState, deltaMs)

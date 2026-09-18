@@ -11,13 +11,20 @@ enum class AnimationState {
     IDLE,
     WALK,
     ATTACK,
+
+    /**
+     * A skill, as opposed to a basic swing. Separate because a class's power
+     * should not look like its ordinary attack — if the two read the same, the
+     * resource you spent bought nothing you can see.
+     */
+    SPECIAL,
     HURT,
     ROLL,
     DIE;
 
     companion object {
         /** States that play once and stop rather than looping. */
-        val oneShot = setOf(ATTACK, HURT, DIE)
+        val oneShot = setOf(ATTACK, SPECIAL, HURT, DIE)
     }
 }
 
@@ -27,6 +34,16 @@ enum class SpriteFacing {
     SOUTH_WEST,
     NORTH_WEST,
     NORTH_EAST;
+
+    /**
+     * Whether this facing should be drawn flipped.
+     *
+     * A generated sheet reliably contains one facing, not four. Mirroring buys
+     * the other side for nothing, and at a three-quarter camera a mirrored
+     * character reads correctly — which is cheaper and more dependable than
+     * asking a model for four consistent angles of the same figure.
+     */
+    val mirrored: Boolean get() = this == SOUTH_WEST || this == NORTH_WEST
 
     companion object {
         /**
@@ -183,6 +200,7 @@ object AnimationSelector {
         isRolling: Boolean = false,
         wasHitRecently: Boolean = false,
         isAttacking: Boolean = false,
+        isCasting: Boolean = false,
         isMoving: Boolean = false,
     ): AnimationState = when {
         isDead -> AnimationState.DIE
@@ -190,6 +208,9 @@ object AnimationSelector {
         // Being hit interrupts an attack: the flinch is the more urgent
         // information, because it tells the player they are losing the trade.
         wasHitRecently -> AnimationState.HURT
+        // A skill outranks a swing: it costs something, so it should be the
+        // thing you see when both are in flight.
+        isCasting -> AnimationState.SPECIAL
         isAttacking -> AnimationState.ATTACK
         isMoving -> AnimationState.WALK
         else -> AnimationState.IDLE

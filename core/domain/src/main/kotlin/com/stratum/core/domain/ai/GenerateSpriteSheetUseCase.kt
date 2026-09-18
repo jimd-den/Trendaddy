@@ -95,7 +95,8 @@ class GenerateSpriteSheetUseCase(
     private fun describe(state: AnimationState): String = when (state) {
         AnimationState.IDLE -> "standing still, breathing"
         AnimationState.WALK -> "a walk cycle"
-        AnimationState.ATTACK -> "swinging an attack"
+        AnimationState.ATTACK -> "swinging a basic attack, wind-up to follow-through"
+        AnimationState.SPECIAL -> "unleashing a signature power, clearly different from the basic attack"
         AnimationState.HURT -> "recoiling from a hit"
         AnimationState.ROLL -> "diving into a roll"
         AnimationState.DIE -> "falling and collapsing"
@@ -141,6 +142,29 @@ data class SheetLayout(
     val sheetHeight: Int get() = rows * frameSize
 
     companion object {
+        /**
+         * The default for a playable character: six frames a row, one row per
+         * state, including a special separate from a basic attack.
+         *
+         * Denser than it was. Four frames is the fewest that reads as motion at
+         * all, and it showed — a walk looked like a stutter and an attack was
+         * two poses. Six is enough for a swing to wind up, land and recover.
+         */
+        fun detailed(frameSize: Int = 64): SheetLayout = SheetLayout(
+            columns = 6,
+            rows = 7,
+            frameSize = frameSize,
+            clips = listOf(
+                AnimationClip(AnimationState.IDLE, firstFrame = 0, frameCount = 6, frameDurationMs = 200),
+                AnimationClip(AnimationState.WALK, firstFrame = 6, frameCount = 6, frameDurationMs = 110),
+                AnimationClip(AnimationState.ATTACK, firstFrame = 12, frameCount = 6, frameDurationMs = 70, loops = false),
+                AnimationClip(AnimationState.SPECIAL, firstFrame = 18, frameCount = 6, frameDurationMs = 80, loops = false),
+                AnimationClip(AnimationState.HURT, firstFrame = 24, frameCount = 6, frameDurationMs = 90, loops = false),
+                AnimationClip(AnimationState.ROLL, firstFrame = 30, frameCount = 6, frameDurationMs = 60, loops = false),
+                AnimationClip(AnimationState.DIE, firstFrame = 36, frameCount = 6, frameDurationMs = 130, loops = false),
+            ),
+        )
+
         /** Idle, walk, attack, hurt: one row each. */
         fun standard(frameSize: Int = 64): SheetLayout = SheetLayout(
             columns = 4,
