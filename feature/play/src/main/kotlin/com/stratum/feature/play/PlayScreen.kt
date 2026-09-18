@@ -139,6 +139,7 @@ fun PlayScreenContent(
                 isRolling = state.isRolling,
                 isInvulnerable = state.isInvulnerable,
                 flashFor = state.flashFor,
+                impactFor = state.impactFor,
                 spriteFor = state.spriteFor,
                 playerAnimation = state.playerAnimation,
                 animationFor = state.animationFor,

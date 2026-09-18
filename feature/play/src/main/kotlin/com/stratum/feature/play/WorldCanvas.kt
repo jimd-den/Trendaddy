@@ -62,6 +62,8 @@ fun WorldCanvas(
     isRolling: Boolean = false,
     isInvulnerable: Boolean = false,
     flashFor: (String) -> Float = { 0f },
+    /** How hard an actor is being knocked back, 0..1. Drives the recoil. */
+    impactFor: (String) -> Float = { 0f },
     /**
      * Supplies the drawn sheet for an actor, or null to fall back to shapes.
      * Every actor without art still renders, which is what lets sprites arrive
@@ -277,17 +279,27 @@ fun WorldCanvas(
                     }
                 }
                 is Actor.Monster -> {
+                    // A struck body dips and squashes for as long as it is
+                    // being shoved. Without it a hit is only a number, and a
+                    // heavy blow looks exactly like a glancing one.
+                    val recoil = impactFor(actor.enemy.instanceId)
+                    // Dipped into the blow while it is being shoved.
+                    val dip = recoil * RECOIL_DIP * projection.tileHeight * projection.zoom
                     val sprite = spriteFor(SpriteKey.Monster(actor.enemy.definitionId))
                     if (sprite != null) {
                         drawSprite(
-                            x, y, projection, sprite,
+                            x, y + dip, projection, sprite,
                             animationFor(actor.enemy.instanceId),
                             SpriteFacing.of(0, 1),
                             flashFor(actor.enemy.instanceId),
                         )
                         drawEnemyOverlay(x, y, projection, actor.enemy)
                     } else {
-                        drawEnemy(x, y, projection, actor.enemy, flashFor(actor.enemy.instanceId))
+                        drawEnemy(
+                            x, y + dip, projection, actor.enemy,
+                            flashFor(actor.enemy.instanceId),
+                            squash = 1f - recoil * RECOIL_SQUASH,
+                        )
                     }
                 }
                 is Actor.Player -> {
@@ -494,6 +506,8 @@ private fun DrawScope.drawEnemy(
     projection: IsometricProjection,
     enemy: EnemyInstance,
     flash: Float = 0f,
+    /** Under 1 while the body is being knocked back, so a hit flattens it. */
+    squash: Float = 1f,
 ) {
     val scale = projection.tileWidth * projection.zoom
     val radius = scale * 0.16f * enemy.rank.sizeMultiplier()
@@ -513,11 +527,19 @@ private fun DrawScope.drawEnemy(
         blue = body.blue + (1f - body.blue) * flash,
         alpha = 1f,
     )
-    drawCircle(lit, radius * (1f + flash * HIT_SWELL), Offset(x, y - lift))
-    drawCircle(
-        Color.Black.copy(alpha = 0.5f),
-        radius,
-        Offset(x, y - lift),
+    val swollen = radius * (1f + flash * HIT_SWELL)
+    // Squashed vertically rather than scaled down: a body absorbing a blow
+    // widens as it compresses, which is what makes the hit look like weight
+    // rather than the monster simply getting smaller.
+    drawOval(
+        color = lit,
+        topLeft = Offset(x - swollen, y - lift - swollen * squash),
+        size = Size(swollen * 2f, swollen * 2f * squash),
+    )
+    drawOval(
+        color = Color.Black.copy(alpha = 0.5f),
+        topLeft = Offset(x - radius, y - lift - radius * squash),
+        size = Size(radius * 2f, radius * 2f * squash),
         style = Stroke(1.5f),
     )
 
@@ -941,6 +963,10 @@ private const val PROP_GLYPH_SCALE = 0.62f
 private const val GLYPH_BASELINE = 0.18f
 /** Loot is smaller than scenery: bright and specific, not a landmark. */
 private const val LOOT_GLYPH_SCALE = 0.42f
+/** How far a struck body dips, as a fraction of a tile. */
+private const val RECOIL_DIP = 0.22f
+/** How much a struck body flattens at full force. */
+private const val RECOIL_SQUASH = 0.3f
 private val TARGET_FILL = Color(0xFFFFFFFF).copy(alpha = 0.18f)
 private val TARGET_EDGE = Color(0xFF14110E).copy(alpha = 0.85f)
 private val INVULNERABLE_RING = Color(0xFF7FD4E0)

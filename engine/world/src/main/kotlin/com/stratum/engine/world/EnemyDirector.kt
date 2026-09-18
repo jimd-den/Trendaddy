@@ -150,7 +150,12 @@ class EnemyDirector(
 
         val speed = (definition?.moveSpeed ?: DEFAULT_SPEED) * deltaSeconds
         val moved = when (state) {
-            EnemyState.CHASING -> step(enemy.position, target, speed)
+            // Never run past what it is running at. Without the clamp a long
+            // frame carries a monster clean through the player and out the far
+            // side, and the chase turns into an oscillation the player can only
+            // watch. Closing to exactly its reach is the most it ever wants.
+            EnemyState.CHASING ->
+                step(enemy.position, target, speed.coerceAtMost(distance - enemy.stats.attackRange))
             EnemyState.FLEEING -> step(enemy.position, target, -speed)
             else -> enemy.position
         }
@@ -168,6 +173,7 @@ class EnemyDirector(
         val dy = toward.y - from.y
         val length = sqrt(dx * dx + dy * dy)
         if (length < 1e-4f) return from
+        if (distance == 0f) return from
 
         val nx = from.x + (dx / length) * distance
         val ny = from.y + (dy / length) * distance

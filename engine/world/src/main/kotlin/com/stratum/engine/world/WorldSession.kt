@@ -71,6 +71,12 @@ class WorldSession(
     private val feedbackLog = FeedbackLog()
     private val hitFlashes = HitFlashes()
 
+    /** Knockback, so a hit moves the thing it lands on. */
+    private val impacts = ImpactField(streamingWorld)
+
+    /** How hard an actor is currently being shoved, 0..1, for the renderer. */
+    fun impactFor(actorId: String): Float = impacts.intensity(actorId)
+
     /** Short-lived visuals: damage numbers, misses, level-ups. */
     val feedback: List<FeedbackMark> get() = feedbackLog.active
 
@@ -338,6 +344,7 @@ class WorldSession(
         feedbackLog.advance(deltaSeconds)
         hitFlashes.advance(deltaSeconds)
         advanceAttackHolds(deltaSeconds)
+        advanceImpacts(deltaSeconds)
 
         // Movement first: a roll should be able to carry the player out of
         // reach before the monsters around them take their swing.
@@ -493,6 +500,21 @@ class WorldSession(
                 )
             }
             hitFlashes.strike(hit.enemyId)
+            // Shoved away from whoever swung. Force scales with the blow, so a
+            // critical visibly throws and a chip barely rocks — the difference
+            // between a heavy hit and a glancing one becomes something you see
+            // rather than something you read off a number.
+            // Only a heavy hit really throws. An ordinary swing barely rocks
+            // the body, because knocking a monster back every time pushes it
+            // out of reach and turns melee into chase-and-poke.
+            val heavy = hit.result.wasCritical ||
+                hit.result.amount >= hit.enemy.stats.maxHealth * HEAVY_HIT_FRACTION
+            impacts.strike(
+                actorId = hit.enemyId,
+                from = player.position,
+                to = hit.enemy.position,
+                force = hit.result.amount.toFloat() * if (heavy) 1f else LIGHT_HIT_DAMPING,
+            )
         }
 
         val healed = outcome.hits.sumOf { it.result.healedAttacker }
@@ -511,6 +533,7 @@ class WorldSession(
             enemies = enemies.filter { it.isAlive }
             slain.forEach { enemy ->
                 hitFlashes.forget(enemy.instanceId)
+                impacts.forget(enemy.instanceId)
                 dropLootFor(enemy)
                 dropInsertFor(enemy)
             }
@@ -691,6 +714,7 @@ class WorldSession(
         miningProgress = 0f
         feedbackLog.clear()
         hitFlashes.clear()
+        impacts.clear()
         attackHolds.clear()
         castHolds.clear()
         playbacks.clear()
@@ -809,6 +833,18 @@ class WorldSession(
         if (amount <= 0) return player.isAlive
         player = player.damaged(amount)
         return player.isAlive
+    }
+
+    /** Moves whatever is still being knocked back, and forgets the dead. */
+    private fun advanceImpacts(deltaSeconds: Float) {
+        val moved = impacts.advance(
+            deltaSeconds,
+            enemies.associate { it.instanceId to it.position },
+        )
+        if (moved.isEmpty()) return
+        enemies = enemies.map { enemy ->
+            moved[enemy.instanceId]?.let { enemy.copy(position = it) } ?: enemy
+        }
     }
 
     private fun advanceAttackHolds(deltaSeconds: Float) {
@@ -1006,6 +1042,11 @@ class WorldSession(
         const val REVIVE_CLEAR_RADIUS = 8f
         const val DEFAULT_DAMAGE_TYPE = "stratum:physical"
 
+
+        /** A hit taking this share of a body's health throws it properly. */
+        const val HEAVY_HIT_FRACTION = 0.25f
+        /** What an ordinary swing's knockback is scaled down to. */
+        const val LIGHT_HIT_DAMPING = 0.2f
 
         const val PLAYER_ACTOR_ID = "player"
         /** How long an actor is considered mid-swing, for animation only. */
