@@ -1042,7 +1042,7 @@ private const val SPREAD_FRACTION = 0.16f
  * the camera, so measuring against the width is measuring against the ground
  * the character is standing on.
  */
-private const val SPRITE_HEIGHT_TILES = 1.9f
+private const val SPRITE_HEIGHT_TILES = 2.15f
 
 /** How much of the sprite's width the shadow spans when standing. */
 private const val SHADOW_WIDTH = 0.72f

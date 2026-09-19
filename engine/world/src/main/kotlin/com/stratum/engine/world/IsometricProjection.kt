@@ -17,15 +17,28 @@ data class IsometricProjection(
     /**
      * Screen width of one block's top face.
      *
-     * Sized so a phone shows roughly a dozen blocks across rather than thirty.
-     * At the old scale the character was a speck and the terrain read as
-     * texture; this is close enough to see what you are fighting.
+     * Sized so a phone shows a dozen or so blocks across. It was 96, which was
+     * a correction of an earlier scale where the character was a speck and the
+     * terrain read as texture -- and it over-corrected: five tiles on a screen
+     * is not a landscape, it is a close-up of five tiles.
      */
-    val tileWidth: Float = 96f,
+    val tileWidth: Float = 72f,
     /** Screen height of one block's top face; half the width gives the 2:1 look. */
-    val tileHeight: Float = 48f,
-    /** Screen height gained per z level. */
-    val blockHeight: Float = 48f,
+    val tileHeight: Float = 36f,
+    /**
+     * Screen height gained per z level.
+     *
+     * A third of the tile width rather than a half. At a half, a block's side
+     * face is as tall as the whole tile is deep, so a two-block terrace became
+     * a wall taller than the person standing under it: the ground read as a
+     * stack of cubes rather than as ground, and every ledge looked like
+     * something to be walled in by rather than stepped onto.
+     *
+     * Lower blocks are also what make the terrain read as *workable*. A ledge
+     * you could climb, dig through or build up in a couple of actions invites
+     * that; a canyon face does not.
+     */
+    val blockHeight: Float = 26f,
     val zoom: Float = 1f,
 ) {
     private val halfWidth get() = tileWidth * zoom / 2f
