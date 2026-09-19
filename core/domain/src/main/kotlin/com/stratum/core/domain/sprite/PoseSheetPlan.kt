@@ -12,6 +12,7 @@ data class PoseCell(
     val column: Int,
     val row: Int,
 ) {
+
     fun cellIndex(columns: Int): Int = row * columns + column
 
     companion object {
@@ -24,8 +25,8 @@ data class PoseCell(
          * would be a run that generates forty frames and composites none of
          * them.
          */
-        fun keyOf(state: AnimationState, index: Int): String =
-            "${state.name.lowercase()}_$index"
+        fun keyOf(state: AnimationState, index: Int, viewSuffix: String = ""): String =
+            "${state.name.lowercase()}_$index$viewSuffix"
     }
 }
 
@@ -137,6 +138,14 @@ object PoseSheetPlanner {
         frameCounts: Map<AnimationState, Int>,
         cellSize: Int = DEFAULT_CELL,
         origin: SpriteOrigin = SpriteOrigin.AI_GENERATED,
+        /**
+         * The angles drawn, as (key suffix, the facings that angle serves).
+         *
+         * Passed as plain data rather than as the generation layer's enum, so
+         * the sheet model keeps knowing nothing about how its art was made.
+         */
+        views: List<Pair<String, List<SpriteFacing>>> =
+            listOf("" to listOf(SpriteFacing.SOUTH_EAST, SpriteFacing.SOUTH_WEST)),
     ): PoseSheetPlan? {
         val rows = AnimationState.generatedRowOrder
             .mapNotNull { state -> frameCounts[state]?.takeIf { it > 0 }?.let { state to it } }
@@ -145,42 +154,69 @@ object PoseSheetPlanner {
         val columns = rows.maxOf { it.second }
         val size = cellSize.coerceIn(MIN_CELL, MAX_CELL)
 
+        val angles = views.ifEmpty {
+            listOf("" to listOf(SpriteFacing.SOUTH_EAST, SpriteFacing.SOUTH_WEST))
+        }
+
         val cells = mutableListOf<PoseCell>()
         val clips = mutableListOf<AnimationClip>()
+        val facingRows = mutableMapOf<SpriteFacing, Int>()
 
-        rows.forEachIndexed { row, (state, count) ->
-            for (index in 0 until count) {
-                cells += PoseCell(
-                    key = PoseCell.keyOf(state, index),
-                    state = state,
-                    index = index,
-                    column = index,
-                    row = row,
-                )
+        // One block of rows per angle, stacked. The runtime reads a facing as
+        // a row offset added to the frame index, so a clip written once
+        // against the first block serves every angle: the offset carries it
+        // into the right block, and the mirror rule covers the other side of
+        // each pair. That is what keeps a two-angle sheet from needing two of
+        // everything else.
+        angles.forEachIndexed { angle, (suffix, facings) ->
+            val blockRow = angle * rows.size
+            facings.forEach { facing -> facingRows[facing] = blockRow }
+
+            rows.forEachIndexed { row, (state, count) ->
+                for (index in 0 until count) {
+                    cells += PoseCell(
+                        key = PoseCell.keyOf(state, index, suffix),
+                        state = state,
+                        index = index,
+                        column = index,
+                        row = blockRow + row,
+                    )
+                }
+                // Clips come from the first block only. A second set would be
+                // the same animation named twice, and the sheet has one clip
+                // per state by construction.
+                if (angle == 0) {
+                    clips += AnimationClip(
+                        state = state,
+                        firstFrame = row * columns,
+                        frameCount = count,
+                        frameDurationMs = state.defaultFrameDurationMs,
+                        loops = state !in AnimationState.oneShot,
+                    )
+                }
             }
-            clips += AnimationClip(
-                state = state,
-                firstFrame = row * columns,
-                frameCount = count,
-                frameDurationMs = state.defaultFrameDurationMs,
-                loops = state !in AnimationState.oneShot,
-            )
         }
+
+        val totalRows = rows.size * angles.size
 
         return PoseSheetPlan(
             cellWidth = size,
             cellHeight = size,
             columns = columns,
-            rows = rows.size,
+            rows = totalRows,
             cells = cells,
             sheet = SpriteSheet(
                 id = id,
                 name = name,
                 columns = columns,
-                rows = rows.size,
+                rows = totalRows,
                 frameWidth = size,
                 frameHeight = size,
                 clips = clips,
+                facingRows = facingRows,
+                // Still mirrored: each drawn angle covers its own pair by
+                // being flipped, which is why two drawn angles cover four.
+                mirrorsFacings = true,
                 origin = origin,
             ),
         )

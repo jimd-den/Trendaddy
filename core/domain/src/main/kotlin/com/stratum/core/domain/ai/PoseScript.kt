@@ -17,9 +17,11 @@ data class PoseStep(
     /** Position within its own animation, so a retry knows what it is replacing. */
     val index: Int,
     val instruction: String,
+    /** Which way the body is turned. Defaulted, so the front is unchanged. */
+    val view: PoseView = PoseView.FRONT,
 ) {
     /** Stable across runs, so a stored pose can be matched to the step that asked for it. */
-    val key: String get() = PoseCell.keyOf(state, index)
+    val key: String get() = PoseCell.keyOf(state, index, view.keySuffix)
 }
 
 /**
@@ -44,9 +46,23 @@ data class PoseScript(val steps: List<PoseStep>) {
 
     fun stepsFor(state: AnimationState): List<PoseStep> = steps.filter { it.state == state }
 
+    /** The angles this script draws, in sheet order. */
+    val views: List<PoseView>
+        get() = steps.map { it.view }.distinct()
+
+    fun stepsFor(state: AnimationState, view: PoseView): List<PoseStep> =
+        steps.filter { it.state == state && it.view == view }
+
+    fun stepsFor(view: PoseView): List<PoseStep> = steps.filter { it.view == view }
+
     /** How many frames each state ends up with, which is what the sheet is planned from. */
     fun frameCounts(): Map<AnimationState, Int> =
-        states.associateWith { state -> stepsFor(state).size }
+        states.associateWith { state ->
+            // Counted within one view. Both views hold the same animation at
+            // the same length, and counting across them would plan a sheet
+            // twice as wide as the walk it is laying out.
+            stepsFor(state, views.firstOrNull() ?: PoseView.FRONT).size
+        }
 
     /**
      * What is left to draw, given what is already on disk.
@@ -79,21 +95,35 @@ data class PoseScript(val steps: List<PoseStep>) {
         fun of(
             states: Collection<AnimationState>,
             frames: Map<AnimationState, Int> = emptyMap(),
+            views: List<PoseView> = listOf(PoseView.FRONT),
         ): PoseScript = PoseScript(
-            AnimationState.generatedRowOrder
-                .filter { it in states }
-                .flatMap { state ->
-                    posesFor(state, frames[state] ?: DEFAULT_FRAMES)
-                        .mapIndexed { index, instruction -> PoseStep(state, index, instruction) }
-                },
+            // Views outermost, so every front frame is asked for before any
+            // away frame. A run that is stopped halfway then leaves a complete
+            // set of one angle rather than half of each, and a character with
+            // no back is playable where a character with half a walk is not.
+            views.flatMap { view ->
+                AnimationState.generatedRowOrder
+                    .filter { it in states }
+                    .flatMap { state ->
+                        posesFor(state, frames[state] ?: DEFAULT_FRAMES)
+                            .mapIndexed { index, instruction ->
+                                PoseStep(state, index, instruction, view)
+                            }
+                    }
+            },
         )
 
         /** Everything a playable character needs. Forty frames is an evening, not a coffee. */
-        fun full(frames: Map<AnimationState, Int> = emptyMap()): PoseScript =
-            of(AnimationState.entries, frames)
+        fun full(
+            frames: Map<AnimationState, Int> = emptyMap(),
+            views: List<PoseView> = listOf(PoseView.FRONT),
+        ): PoseScript = of(AnimationState.entries, frames, views)
 
         /** Idle, walk, attack, death: what an enemy is actually seen doing. */
-        fun enemy(frames: Map<AnimationState, Int> = emptyMap()): PoseScript = of(
+        fun enemy(
+            frames: Map<AnimationState, Int> = emptyMap(),
+            views: List<PoseView> = listOf(PoseView.FRONT),
+        ): PoseScript = of(
             listOf(
                 AnimationState.IDLE,
                 AnimationState.WALK,
@@ -101,6 +131,7 @@ data class PoseScript(val steps: List<PoseStep>) {
                 AnimationState.DIE,
             ),
             frames,
+            views,
         )
 
         /**

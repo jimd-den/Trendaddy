@@ -118,6 +118,7 @@ fun PoseForgeScreen(
         onScopeChange = viewModel::selectScope,
         onRoleChange = viewModel::selectRole,
         onFramesChange = viewModel::selectFrames,
+        onAwayViewChange = viewModel::toggleAwayView,
         onCellSizeChange = viewModel::selectCellSize,
         onDrawReference = viewModel::drawReferencePose,
         onBuildAnimations = viewModel::buildAnimations,
@@ -150,6 +151,7 @@ fun PoseForgeContent(
     onScopeChange: (PoseScope) -> Unit = {},
     onRoleChange: (CharacterRole) -> Unit = {},
     onFramesChange: (AnimationState, Int) -> Unit = { _, _ -> },
+    onAwayViewChange: (Boolean) -> Unit = {},
     onCellSizeChange: (Int) -> Unit = {},
     onDrawReference: () -> Unit = {},
     onBuildAnimations: () -> Unit = {},
@@ -222,7 +224,7 @@ fun PoseForgeContent(
         Spacer(Modifier.height(Space.medium))
         CharacterPanel(
             state, onSubjectChange, onStyleChange, onScopeChange, onRoleChange,
-            onFramesChange,
+            onFramesChange, onAwayViewChange,
         )
 
         Spacer(Modifier.height(Space.medium))
@@ -322,6 +324,7 @@ private fun CharacterPanel(
     onScopeChange: (PoseScope) -> Unit,
     onRoleChange: (CharacterRole) -> Unit,
     onFramesChange: (AnimationState, Int) -> Unit,
+    onAwayViewChange: (Boolean) -> Unit,
 ) {
     val colors = StratumTheme.colors
 
@@ -397,6 +400,46 @@ private fun CharacterPanel(
         // count: an idle is looked at for minutes on end and a death is seen
         // once. A single number either starves the idle or pays for frames the
         // death will never show.
+        // Offered next to the frame counts because it is the same kind of
+        // decision and the same kind of cost: both of them multiply the number
+        // of generations, and both are cheaper to decide now than to discover
+        // halfway through a run.
+        Spacer(Modifier.height(Space.medium))
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(Space.small),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Angles",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkMuted,
+                modifier = Modifier.width(SIDE_LABEL),
+            )
+            StratumChip(
+                label = "Towards only",
+                selected = !state.drawsAwayView,
+                onClick = { onAwayViewChange(false) },
+            )
+            StratumChip(
+                label = "Towards + away",
+                selected = state.drawsAwayView,
+                onClick = { onAwayViewChange(true) },
+            )
+        }
+        Spacer(Modifier.height(Space.small))
+        Text(
+            text = if (state.drawsAwayView) {
+                "Doubles the generations. Without it a character walking north keeps its " +
+                    "face to you, because flipping the front cannot make a back of a head."
+            } else {
+                "One angle, mirrored for the other side. A character walking away keeps " +
+                    "its face towards you."
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.inkMuted,
+        )
+
         Spacer(Modifier.height(Space.medium))
         Text(
             text = "Frames per animation",

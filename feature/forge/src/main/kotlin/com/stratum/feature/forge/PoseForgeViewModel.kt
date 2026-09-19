@@ -13,6 +13,7 @@ import com.stratum.core.domain.ai.PoseRunPolicy
 import com.stratum.core.domain.ai.PoseScript
 import com.stratum.core.domain.ai.RunDecision
 import com.stratum.core.domain.ai.PoseStep
+import com.stratum.core.domain.ai.PoseView
 import com.stratum.core.domain.ai.SavedCharacter
 import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.sprite.PackedSheet
@@ -218,6 +219,10 @@ class PoseForgeViewModel(
         _state.value = _state.value.copy(
             frames = _state.value.frames + (state to wanted),
         )
+    }
+
+    fun toggleAwayView(on: Boolean) {
+        _state.value = _state.value.copy(drawsAwayView = on)
     }
 
     fun selectScope(scope: PoseScope) {
@@ -475,6 +480,16 @@ class PoseForgeViewModel(
             name = current.subject.trim().ifBlank { "Character" },
             frameCounts = counts,
             cellSize = current.cellSize,
+            // Only the angles that actually came back. Planning a block of
+            // rows for an away view nobody drew would leave the bottom half
+            // of the sheet empty and the renderer would walk the character
+            // north as a hole in the world.
+            views = current.views
+                .filter { view ->
+                    current.script.stepsFor(view).any { it.key in drawn }
+                }
+                .ifEmpty { listOf(PoseView.FRONT) }
+                .map { it.keySuffix to it.serves },
         )
         if (plan == null) {
             _state.value = current.copy(error = "There is nothing to pack yet.")
@@ -678,10 +693,13 @@ enum class PoseScope(val label: String) {
     /** Everything, for the character a player looks at all session. */
     FULL("Full character");
 
-    /** The script for this scope at the frame counts the person chose. */
-    fun scriptFor(frames: Map<AnimationState, Int>): PoseScript = when (this) {
-        ENEMY -> PoseScript.enemy(frames)
-        FULL -> PoseScript.full(frames)
+    /** The script for this scope at the frame counts and angles the person chose. */
+    fun scriptFor(
+        frames: Map<AnimationState, Int>,
+        views: List<PoseView>,
+    ): PoseScript = when (this) {
+        ENEMY -> PoseScript.enemy(frames, views)
+        FULL -> PoseScript.full(frames, views)
     }
 
     val states: List<AnimationState>
@@ -709,6 +727,14 @@ data class PoseForgeUiState(
      * same count: an idle is watched for minutes and a death is seen once.
      */
     val frames: Map<AnimationState, Int> = emptyMap(),
+    /**
+     * Whether the away-facing angle is drawn too.
+     *
+     * Off by default: it doubles the cost and the time of a character, and a
+     * character with only a front is perfectly playable -- it simply walks
+     * north with its face towards you.
+     */
+    val drawsAwayView: Boolean = false,
     val cellSize: Int = PoseSheetPlanner.DEFAULT_CELL,
     val setId: String? = null,
     val hasReference: Boolean = false,
@@ -730,7 +756,10 @@ data class PoseForgeUiState(
     /** Every character on disk, so one can be picked up without retyping it. */
     val characters: List<SavedCharacter> = emptyList(),
 ) {
-    val script: PoseScript get() = scope.scriptFor(frames)
+    val views: List<PoseView>
+        get() = if (drawsAwayView) listOf(PoseView.FRONT, PoseView.AWAY) else listOf(PoseView.FRONT)
+
+    val script: PoseScript get() = scope.scriptFor(frames, views)
 
     /** How many frames [state] is set to, falling back to the default. */
     fun framesFor(state: AnimationState): Int =

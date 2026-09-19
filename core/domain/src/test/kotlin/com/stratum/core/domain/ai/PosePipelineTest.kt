@@ -3,6 +3,7 @@ package com.stratum.core.domain.ai
 import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.sprite.AtlasBaker
 import com.stratum.core.domain.sprite.MocapPoses
+import com.stratum.core.domain.sprite.SpriteFacing
 import com.stratum.core.domain.sprite.PoseCell
 import com.stratum.core.domain.sprite.PoseSheetPlanner
 import kotlinx.coroutines.test.runTest
@@ -294,6 +295,98 @@ class PoseSheetPlannerTest {
         // an exhausted key looks like, and a divide by zero on top of that
         // would replace a clear failure with a crash.
         assertEquals(plan, plan.fittedTo(0, 0))
+    }
+
+    @Test
+    fun `an away view is a second block of rows the facing reaches`() {
+        val plan = assertNotNull(
+            PoseSheetPlanner.plan(
+                id = "t",
+                name = "T",
+                frameCounts = mapOf(AnimationState.IDLE to 6, AnimationState.WALK to 6),
+                views = listOf(
+                    "" to listOf(SpriteFacing.SOUTH_EAST, SpriteFacing.SOUTH_WEST),
+                    "_away" to listOf(SpriteFacing.NORTH_EAST, SpriteFacing.NORTH_WEST),
+                ),
+            ),
+        )
+
+        // Two states, two angles: four rows, not two and not eight.
+        assertEquals(4, plan.rows)
+        assertEquals(6, plan.columns)
+
+        // Every pose of both angles has a cell, and they are different cells.
+        val front = assertNotNull(plan.cellFor("walk_2"))
+        val away = assertNotNull(plan.cellFor("walk_2_away"))
+        assertEquals(front.column, away.column)
+        assertEquals(front.row + 2, away.row, "the away block did not start after the front one")
+
+        // The clip is written once, against the first block. This is the part
+        // that would break silently: a second set of clips would be the same
+        // animation named twice, and the sheet has one clip per state.
+        assertEquals(2, plan.sheet.clips.size)
+
+        // And the facing is what carries a frame into the right block.
+        val walk = assertNotNull(plan.sheet.clip(AnimationState.WALK))
+        val frame = walk.firstFrame + 2
+        assertEquals(frame, plan.sheet.frameFor(frame, SpriteFacing.SOUTH_EAST))
+        assertEquals(
+            frame + 2 * plan.columns,
+            plan.sheet.frameFor(frame, SpriteFacing.NORTH_EAST),
+            "walking away drew the frame facing the viewer",
+        )
+        // The mirror still covers the other side of each pair, which is why
+        // two drawn angles serve four.
+        assertEquals(
+            plan.sheet.frameFor(frame, SpriteFacing.NORTH_EAST),
+            plan.sheet.frameFor(frame, SpriteFacing.NORTH_WEST),
+        )
+        assertTrue(SpriteFacing.NORTH_WEST.mirrored)
+    }
+
+    @Test
+    fun `a front-only sheet is exactly what it was before views existed`() {
+        // The default has to stay byte-for-byte what every character already
+        // on disk was planned as, or opening one re-cuts it.
+        val plan = assertNotNull(
+            PoseSheetPlanner.plan("t", "T", mapOf(AnimationState.IDLE to 6)),
+        )
+        assertEquals(1, plan.rows)
+        assertEquals("idle_0", plan.cells.first().key)
+        assertEquals(0, plan.sheet.frameFor(0, SpriteFacing.NORTH_WEST))
+    }
+
+    @Test
+    fun `a script draws every front frame before any away frame`() {
+        // A run that stops halfway should leave one complete angle rather than
+        // half of each: a character with no back is playable, a character with
+        // half a walk is not.
+        val script = PoseScript.full(views = listOf(PoseView.FRONT, PoseView.AWAY))
+        assertEquals(84, script.steps.size)
+        val firstAway = script.steps.indexOfFirst { it.view == PoseView.AWAY }
+        assertEquals(42, firstAway)
+        assertTrue(script.steps.take(42).all { it.view == PoseView.FRONT })
+
+        // The sheet is still six frames wide: both angles hold the same
+        // animation at the same length, and counting across them would plan a
+        // sheet twice as wide as the walk it is laying out.
+        assertEquals(6, script.frameCounts().values.max())
+    }
+
+    @Test
+    fun `an away pose is filed under its own key`() {
+        // Sharing a key with the front would overwrite it on disk, and the
+        // symptom would be a character whose front is its back.
+        val front = PoseScript.full().steps.first { it.state == AnimationState.IDLE }
+        val away = PoseScript.full(views = listOf(PoseView.AWAY))
+            .steps.first { it.state == AnimationState.IDLE }
+        assertEquals("idle_0", front.key)
+        assertEquals("idle_0_away", away.key)
+
+        // And the away prompt says the face is not visible, which is the whole
+        // difference between a back view and the same drawing again.
+        assertTrue(away.view.turnClause.contains("not visible"))
+        assertTrue(front.view.turnClause.isBlank())
     }
 
     @Test
