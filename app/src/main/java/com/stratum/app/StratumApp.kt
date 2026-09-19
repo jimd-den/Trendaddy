@@ -63,6 +63,7 @@ import com.stratum.core.data.sprite.WeaponPreparer
 import com.stratum.core.data.sprite.SpriteAtlasBaker
 import com.stratum.core.domain.sprite.SheetPreparation
 import com.stratum.core.domain.sprite.SpriteMapper
+import com.stratum.core.domain.sprite.SpriteNamespace
 import com.stratum.core.domain.ai.ImageReference
 import com.stratum.core.domain.ai.PoseScript
 import com.stratum.core.domain.ai.PoseStep
@@ -170,11 +171,13 @@ fun StratumApp(
                     // to see it, rather than art they made sitting unused
                     // because they missed a picker.
                     listOfNotNull(chosen?.let(contentWithSprites::sheetForHero)) +
-                        contentWithSprites.spriteSheets.filter { it.id.startsWith("hero:") }
+                        contentWithSprites.spriteSheets
+                            .filter { SpriteNamespace.servesHero(it.id) }
                 }
                 is SpriteKey.Monster ->
                     listOfNotNull(contentWithSprites.sheetForEnemy(key.definitionId)) +
-                        contentWithSprites.spriteSheets.filter { it.id.startsWith("monster:") }
+                        contentWithSprites.spriteSheets
+                            .filter { SpriteNamespace.servesMonster(it.id) }
             }
 
             candidates.distinctBy { it.id }.firstNotNullOfOrNull { found ->
@@ -253,7 +256,12 @@ fun StratumApp(
 
         Destination.CLASSES -> {
             val classViewModel: ClassForgeViewModel = viewModel(
-                key = "classes-$classRevision",
+                // Keyed on the sprite revision too. Without it the picker is
+                // built once and then lists whatever art existed at that
+                // moment, so a character generated afterwards cannot be
+                // chosen -- which looks exactly like the generator not having
+                // worked.
+                key = "classes-$classRevision-$spriteRevision",
                 factory = ClassForgeViewModel.factory(
                     content = content,
                     saveClass = { hero ->

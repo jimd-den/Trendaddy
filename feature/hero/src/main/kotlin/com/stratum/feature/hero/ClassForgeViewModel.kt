@@ -6,6 +6,7 @@ import com.stratum.core.domain.content.AssembledContent
 import com.stratum.core.domain.content.ClassDraft
 import com.stratum.core.domain.content.ClassOptions
 import com.stratum.core.domain.content.HeroClassDefinition
+import com.stratum.core.domain.sprite.SpriteNamespace
 import com.stratum.core.domain.sprite.SpriteSheet
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -97,13 +98,16 @@ class ClassForgeViewModel(
     }
 
     /**
-     * Only hero art. A monster sheet is laid out differently and would read as
-     * a broken character rather than as the wrong choice.
+     * Art a hero can be drawn with. A monster sheet is laid out differently and
+     * would read as a broken character rather than as the wrong choice.
+     *
+     * Generated sheets first: the same id drawn again is the newer art, and
+     * `distinctBy` keeps whichever it sees first.
      */
     private fun heroSheets(): List<SpriteSheet> =
-        (content.spriteSheets + loadSheets())
+        (loadSheets() + content.spriteSheets)
             .distinctBy { it.id }
-            .filter { it.id.startsWith(HERO_NAMESPACE) }
+            .filter { SpriteNamespace.servesHero(it.id) }
 
     fun save() {
         val draft = _state.value.draft
@@ -138,8 +142,6 @@ class ClassForgeViewModel(
                 ClassForgeViewModel(content, saveClass, deleteClass, loadClasses, loadSheets) as T
         }
 
-        /** Sheets the sprite forge files under "hero:". */
-        const val HERO_NAMESPACE = "hero:"
     }
 }
 

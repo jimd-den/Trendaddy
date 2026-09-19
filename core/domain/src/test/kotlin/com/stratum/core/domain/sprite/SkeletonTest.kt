@@ -118,7 +118,7 @@ class WeaponGripTest {
 
     @Test
     fun `the grip is the hand joint itself, not a number near it`() {
-        val pose = skeleton.pose(MocapPoses.poseFor(AnimationState.ATTACK, 0, 4))
+        val pose = skeleton.pose(MocapPoses.poseFor(AnimationState.ATTACK, 0, 6))
         assertEquals(pose.require(Joint.HAND_NEAR), pose.weaponGrip().at)
     }
 }
@@ -144,17 +144,22 @@ class MocapPosesTest {
     @Test
     fun `a walk lifts the body between contacts`() {
         val frames = MocapPoses.framesFor(AnimationState.WALK)
-        // The contacts are the low points and the passes the high ones; without
-        // that difference a walk reads as gliding.
-        assertTrue(frames[0].driftY > frames[1].driftY)
-        assertTrue(frames[2].driftY > frames[3].driftY)
+        // Contact, pass, reach -- twice. The contacts are the low points and
+        // the passes and reaches the high ones; without that difference a walk
+        // reads as gliding.
+        assertTrue(frames[0].driftY > frames[1].driftY, "the first contact did not drop")
+        assertTrue(frames[3].driftY > frames[4].driftY, "the second contact did not drop")
+        // And the reach is the highest point of each half, which is what puts
+        // the bounce at the top of the stride rather than halfway up it.
+        assertTrue(frames[2].driftY < frames[1].driftY, "the first reach did not rise")
+        assertTrue(frames[5].driftY < frames[4].driftY, "the second reach did not rise")
     }
 
     @Test
     fun `an attack carries the weapon hand from high and back to low and across`() {
         val skeleton = Skeleton()
-        val windUp = skeleton.pose(MocapPoses.poseFor(AnimationState.ATTACK, 0, 4))
-        val impact = skeleton.pose(MocapPoses.poseFor(AnimationState.ATTACK, 2, 4))
+        val windUp = skeleton.pose(MocapPoses.poseFor(AnimationState.ATTACK, 0, 6))
+        val impact = skeleton.pose(MocapPoses.poseFor(AnimationState.ATTACK, 2, 6))
 
         val up = windUp.require(Joint.HAND_NEAR)
         val down = impact.require(Joint.HAND_NEAR)

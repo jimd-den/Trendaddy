@@ -40,11 +40,17 @@ class PoseScriptTest {
     }
 
     @Test
-    fun `a walk is four poses and a hurt is two`() {
+    fun `a full script is six frames of every state, which is a 6x7 sheet`() {
         val script = PoseScript.full()
-        assertEquals(4, script.stepsFor(AnimationState.WALK).size)
-        assertEquals(2, script.stepsFor(AnimationState.HURT).size)
+        AnimationState.entries.forEach { state ->
+            assertEquals(6, script.stepsFor(state).size, "$state is not six frames")
+        }
+        assertEquals(42, script.steps.size)
         assertEquals(script.steps.size, script.frameCounts().values.sum())
+
+        // Six across and seven down, which is the shape the sheet comes out.
+        assertEquals(6, script.frameCounts().values.max())
+        assertEquals(7, script.frameCounts().size)
     }
 
     @Test
@@ -386,7 +392,7 @@ class PoseFrameGenerationTest {
             use(PoseFrameRequest(reference = reference, step = step)).getOrThrow()
         }
 
-        assertEquals(4, model.requests.size)
+        assertEquals(6, model.requests.size)
         assertTrue(model.requests.all { it.references == listOf(reference) })
     }
 

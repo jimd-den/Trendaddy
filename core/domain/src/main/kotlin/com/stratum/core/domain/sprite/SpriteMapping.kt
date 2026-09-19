@@ -337,3 +337,37 @@ object SpriteValidation {
         AnimationState.DIE -> "death"
     }
 }
+
+/**
+ * Which actors a sheet's art may stand in for, decided by where it is filed.
+ *
+ * Sheet ids carry a namespace, and three separate places used to test it with
+ * their own copy of a string literal: the class picker, and both halves of the
+ * resolver. A fourth kind of sheet then arrived -- a character generated one
+ * pose at a time -- and was invisible to all of them at once. It was filed
+ * under "pose:", every test asked whether the id began with "hero:" or
+ * "monster:", and so a character somebody had spent forty generations on could
+ * not be chosen, could not be drawn, and gave no hint why.
+ *
+ * One rule, in the domain, is the fix. A pose sheet is a full character sheet
+ * -- laid out in [AnimationState.generatedRowOrder] like any other -- so it
+ * serves either role, which is also what lets one be used as an enemy.
+ */
+object SpriteNamespace {
+
+    const val HERO = "hero:"
+    const val MONSTER = "monster:"
+
+    /** A character generated pose by pose, which is a character either way. */
+    const val POSE = "pose:"
+
+    fun servesHero(sheetId: String): Boolean =
+        sheetId.startsWith(HERO) || sheetId.startsWith(POSE)
+
+    fun servesMonster(sheetId: String): Boolean =
+        sheetId.startsWith(MONSTER) || sheetId.startsWith(POSE)
+
+    /** Whether this is character art at all, rather than a prop or a weapon. */
+    fun isCharacter(sheetId: String): Boolean =
+        servesHero(sheetId) || servesMonster(sheetId)
+}

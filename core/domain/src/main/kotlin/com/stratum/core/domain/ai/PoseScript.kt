@@ -98,11 +98,23 @@ data class PoseScript(val steps: List<PoseStep>) {
          */
         fun posesFor(state: AnimationState): List<String> = when (state) {
             AnimationState.IDLE -> listOf(
-                "standing at rest, weight settled evenly, arms relaxed at the sides, " +
-                    "shoulders down",
-                "the same standing rest, but mid-breath: chest and shoulders lifted very " +
-                    "slightly, head a fraction higher. Everything else identical",
+                "standing at rest, weight settled evenly on both feet, arms relaxed at the " +
+                    "sides, shoulders down",
+                "the same stance, beginning to breathe in: chest and shoulders lifted a " +
+                    "fraction, head a hair higher. Feet, hands and weight identical",
+                "further into the breath: chest fuller, shoulders a little higher and " +
+                    "further back, spine very slightly straighter. Feet identical",
+                "the top of the breath: chest at its fullest, shoulders at their highest, " +
+                    "chin a fraction up. Feet and hands still identical",
+                "breathing out: chest falling, shoulders settling back down, head level " +
+                    "again. Feet identical",
+                "nearly back to rest: shoulders almost down, chest almost settled, a hair " +
+                    "above the first frame so the loop closes without a jump",
             )
+            // A six frame cycle in the order it is walked, not four frames
+            // with two more stuck on the end. Walk is the one state here that
+            // loops, so the order is the animation: every frame has to hand
+            // over to the next and the last has to hand back to the first.
             AnimationState.WALK -> listOf(
                 "mid-stride contact: left leg forward with the heel touching the ground, " +
                     "right leg straight back with the toes still down, right arm swung " +
@@ -110,12 +122,17 @@ data class PoseScript(val steps: List<PoseStep>) {
                 "passing position: the right leg swinging through directly under the body " +
                     "with the knee bent, standing on the left leg, body at its lowest, arms " +
                     "close to the sides",
+                "reaching: the right leg swung forward at full extension just before the " +
+                    "heel lands, body at its highest, left arm reaching forward, right arm back",
                 "mid-stride contact the other way: right leg forward with the heel touching " +
                     "the ground, left leg straight back with the toes down, left arm swung " +
                     "forward and right arm back",
                 "passing position again: the left leg swinging through under the body with " +
                     "the knee bent, standing on the right leg, body at its lowest, arms close " +
                     "to the sides",
+                "reaching again: the left leg swung forward at full extension just before " +
+                    "the heel lands, body at its highest, right arm reaching forward, left " +
+                    "arm back",
             )
             AnimationState.ATTACK -> listOf(
                 "wind-up: weight dropped onto the back foot, torso twisted away from the " +
@@ -126,6 +143,10 @@ data class PoseScript(val steps: List<PoseStep>) {
                     "the far end of its arc where it would strike",
                 "recovery: weapon carried low and across the body, shoulders squaring back " +
                     "up, weight returning to centre",
+                "settling: weight back over both feet, weapon held low at the side, " +
+                    "shoulders level, still leaning very slightly forward",
+                "the end of the follow-through: standing nearly square again, arms low and " +
+                    "relaxed across the front of the body, weight even, knees softly bent",
             )
             AnimationState.SPECIAL -> listOf(
                 "gathering: crouched slightly, both arms drawn in towards the chest, head " +
@@ -136,12 +157,24 @@ data class PoseScript(val steps: List<PoseStep>) {
                     "back, at the peak of the effort",
                 "follow-through: arms falling, body settling back down onto both feet, " +
                     "shoulders dropping",
+                "the last of it: arms nearly at the sides, head coming back level, weight " +
+                    "settling evenly",
+                "standing out of it: upright again, arms at the sides, shoulders square, a " +
+                    "fraction of the effort still in the stance",
             )
             AnimationState.HURT -> listOf(
-                "taking a hit: head snapped back, chest caved in, both arms flung outward, " +
-                    "weight thrown onto the back foot",
+                "the instant of impact: head snapped back, chest caved in, both arms flung " +
+                    "outward, weight thrown onto the back foot",
                 "reeling: doubled further over, one arm across the body, staggering back a " +
                     "step and off balance",
+                "the stagger at its worst: bent low over the front knee, both arms drawn " +
+                    "in to the body, head down",
+                "catching the balance: one foot planted behind, torso beginning to come " +
+                    "back up, one arm still held across the ribs",
+                "straightening: almost upright, shoulders coming back square, the arm " +
+                    "lowering from the ribs",
+                "recovered: standing again with the weight even, arms at the sides, head " +
+                    "up, still tensed",
             )
             AnimationState.ROLL -> listOf(
                 "crouched low and tucked, chin down, arms wrapped in, about to commit " +
@@ -150,6 +183,10 @@ data class PoseScript(val steps: List<PoseStep>) {
                     "feet above the head",
                 "coming out of the roll, uncurling onto one knee with one hand on the ground",
                 "rising out of it, standing back up with the weight forward, ready to move",
+                "fully upright again with the momentum still carrying forward, one foot " +
+                    "ahead of the other, arms coming down",
+                "settled out of the roll: standing square with the weight even, arms at " +
+                    "the sides, ready to move again",
             )
             AnimationState.DIE -> listOf(
                 "staggering: knees buckling, torso pitching forward, arms loose and falling",
@@ -158,6 +195,10 @@ data class PoseScript(val steps: List<PoseStep>) {
                     "weight",
                 "lying still on the ground, face down, limbs slack and splayed, completely " +
                     "motionless",
+                "the same body on the ground, settled a little flatter, one arm having " +
+                    "fallen further out from the side",
+                "the same body on the ground, completely at rest and flat, nothing raised " +
+                    "off the floor, absolutely motionless",
             )
         }
     }

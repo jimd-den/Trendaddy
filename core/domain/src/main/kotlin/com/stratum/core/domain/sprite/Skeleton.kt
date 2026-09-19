@@ -286,7 +286,38 @@ data class PoseAngles(
     /** Moves the whole body, for a crouch, a lunge or a fall. */
     val driftX: Float = 0f,
     val driftY: Float = 0f,
-)
+) {
+    /**
+     * Part way from this pose to [other].
+     *
+     * Every field is an angle or an offset, so a straight blend is the right
+     * one. It exists because the authored poses and the frames asked for are
+     * two different counts that will not always agree: a model asked for six
+     * frames may send five, and without a blend the rig snaps between authored
+     * poses, holding several frames identical and then jumping -- which reads
+     * as the character freezing and twitching rather than moving.
+     */
+    fun blendedTo(other: PoseAngles, amount: Float): PoseAngles {
+        val t = amount.coerceIn(0f, 1f)
+        if (t <= 0f) return this
+        if (t >= 1f) return other
+        fun mix(a: Float, b: Float) = a + (b - a) * t
+        return PoseAngles(
+            shoulderNear = mix(shoulderNear, other.shoulderNear),
+            elbowNear = mix(elbowNear, other.elbowNear),
+            shoulderFar = mix(shoulderFar, other.shoulderFar),
+            elbowFar = mix(elbowFar, other.elbowFar),
+            hipNear = mix(hipNear, other.hipNear),
+            kneeNear = mix(kneeNear, other.kneeNear),
+            hipFar = mix(hipFar, other.hipFar),
+            kneeFar = mix(kneeFar, other.kneeFar),
+            lean = mix(lean, other.lean),
+            headTilt = mix(headTilt, other.headTilt),
+            driftX = mix(driftX, other.driftX),
+            driftY = mix(driftY, other.driftY),
+        )
+    }
+}
 
 /** Rotates a unit vector [degrees] clockwise from straight down and steps along it. */
 private fun JointPoint.along(length: Float, degrees: Float): JointPoint {
