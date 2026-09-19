@@ -50,6 +50,13 @@ import com.stratum.core.domain.sprite.SpriteAtlas
 import com.stratum.core.domain.sprite.SpriteValidation
 import kotlin.math.min
 import kotlin.math.roundToInt
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 
 /**
  * One frame, as large as the screen will allow.
@@ -395,6 +402,13 @@ private fun FrameControls(
             onAction(SpriteMapperAction.ResizeFrame(bottom = -step))
         }
 
+        // Typed, not only nudged. Stepping to an exact size by tapping a plus
+        // is fine for a pixel or two and absurd for a frame that needs to be
+        // 96 wide when it is 137: it is forty taps, and a person who knows the
+        // number they want should be able to say it.
+        Spacer(Modifier.height(Space.small))
+        DimensionFields(frame.source, onAction)
+
         Spacer(Modifier.height(Space.small))
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -499,3 +513,83 @@ private const val SURROUNDS_ALPHA = 0.28f
 private const val DISABLED_ALPHA = 0.35f
 private const val BORDER_WIDTH = 3f
 private const val ANCHOR_WIDTH = 2f
+
+/**
+ * The frame's rectangle as four numbers a person can type into.
+ *
+ * Held as text rather than as the rect's own integers while being edited. A
+ * field bound straight to the value fights whoever is typing: clearing it to
+ * retype reads as zero, so the frame collapses under the cursor and the digit
+ * that follows applies to a rectangle that no longer exists. Text is only
+ * turned back into a rectangle when it parses to something usable.
+ */
+@Composable
+private fun DimensionFields(
+    rect: SourceRect,
+    onAction: (SpriteMapperAction) -> Unit,
+) {
+    val colors = StratumTheme.colors
+    // Re-seeded whenever the rect changes underneath -- a nudge, a snap, an
+    // undo -- so the fields follow the frame rather than showing a stale
+    // number the person did not type.
+    var left by remember(rect) { mutableStateOf(rect.left.toString()) }
+    var top by remember(rect) { mutableStateOf(rect.top.toString()) }
+    var width by remember(rect) { mutableStateOf(rect.width.toString()) }
+    var height by remember(rect) { mutableStateOf(rect.height.toString()) }
+
+    fun apply() {
+        val next = SourceRect(
+            left = left.toIntOrNull() ?: rect.left,
+            top = top.toIntOrNull() ?: rect.top,
+            width = width.toIntOrNull() ?: rect.width,
+            height = height.toIntOrNull() ?: rect.height,
+        )
+        if (next != rect) onAction(SpriteMapperAction.SetFrameRect(next))
+    }
+
+    Column(Modifier.fillMaxWidth()) {
+        Text(
+            text = "Size and position",
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.inkMuted,
+        )
+        Spacer(Modifier.height(Space.small))
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.small)) {
+            NumberField("W", width, Modifier.weight(1f), { width = it }, ::apply)
+            NumberField("H", height, Modifier.weight(1f), { height = it }, ::apply)
+        }
+        Spacer(Modifier.height(Space.small))
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.small)) {
+            NumberField("X", left, Modifier.weight(1f), { left = it }, ::apply)
+            NumberField("Y", top, Modifier.weight(1f), { top = it }, ::apply)
+        }
+    }
+}
+
+@Composable
+private fun NumberField(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    onChange: (String) -> Unit,
+    onCommit: () -> Unit,
+) {
+    OutlinedTextField(
+        value = value,
+        // Digits only, filtered here rather than rejected after the fact: a
+        // field that accepts a letter and then refuses to do anything is a
+        // field that looks broken.
+        onValueChange = { text -> onChange(text.filter { it.isDigit() }.take(5)) },
+        modifier = modifier,
+        label = { Text(label) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Number,
+            imeAction = ImeAction.Done,
+        ),
+        // Applied on Done as well as on losing focus, because on a phone the
+        // keyboard is usually dismissed rather than tabbed away from.
+        keyboardActions = KeyboardActions(onDone = { onCommit() }),
+    )
+    LaunchedEffect(value) { onCommit() }
+}

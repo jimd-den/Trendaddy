@@ -203,7 +203,7 @@ class OpenPoseConversionTest {
             values[at + 1] = 0.5f
             values[at + 2] = 1f
         }
-        OpenPoseLayout.BODY_18.order.forEach { set(it, 0.5f) }
+        OpenPoseLayout.BODY_18.joints.forEach { set(it, 0.5f) }
         set(OpenPoseJoint.LEFT_WRIST, 0.2f)
         set(OpenPoseJoint.RIGHT_WRIST, 0.8f)
 
@@ -277,10 +277,69 @@ class OpenPoseImageReaderTest {
     }
 
     @Test
+    fun `a whole-body file keeps its body joints in the right places`() {
+        // The trap this guards. A whole-body file is seventeen body points,
+        // six feet, and then a hundred and ten face and finger points. Read as
+        // if the feet were followed by the next body joint, a knee lands where
+        // an eyebrow is -- and nothing fails, it just produces a person built
+        // wrong.
+        val layout = OpenPoseLayout.DW_WHOLEBODY
+        assertEquals(133, layout.keypointCount)
+        assertEquals(23, layout.joints.size, "only the body and the feet are modelled")
+
+        val values = MutableList(133 * 3) { 0f }
+        fun place(index: Int, x: Float, y: Float) {
+            values[index * 3] = x
+            values[index * 3 + 1] = y
+            values[index * 3 + 2] = 1f
+        }
+        // Body in COCO order, then the six feet.
+        place(15, 40f, 180f)   // left ankle
+        place(16, 60f, 180f)   // right ankle
+        place(19, 36f, 196f)   // left heel
+        place(22, 64f, 196f)   // right heel
+        // A face point far away, which must not be mistaken for anything.
+        place(60, 999f, 999f)
+
+        val body = assertNotNull(
+            OpenPoseImport.fromFlatArray(values, layout, imageWidth = 200f, imageHeight = 200f),
+        )
+        assertEquals(0.20f, assertNotNull(body[OpenPoseJoint.LEFT_ANKLE]).x, 0.001f)
+        assertEquals(0.30f, assertNotNull(body[OpenPoseJoint.RIGHT_ANKLE]).x, 0.001f)
+        assertEquals(0.98f, assertNotNull(body[OpenPoseJoint.LEFT_HEEL]).y, 0.001f)
+        assertEquals(0.32f, assertNotNull(body[OpenPoseJoint.RIGHT_HEEL]).x, 0.001f)
+        // Nothing picked up the face point.
+        assertTrue(
+            body.keypoints.values.none { it.x > 1.5f },
+            "a face keypoint was read as a body joint",
+        )
+    }
+
+    @Test
+    fun `a body-and-feet export is the front of a whole-body file`() {
+        // Tools that offer to drop the face and hands emit the first
+        // twenty-three, so the two layouts have to agree about what those are
+        // or a trimmed file reads as a different skeleton.
+        assertEquals(
+            OpenPoseLayout.DW_WHOLEBODY.order.take(23),
+            OpenPoseLayout.DW_BODY_FOOT.order,
+        )
+        assertEquals(23, OpenPoseLayout.DW_BODY_FOOT.keypointCount)
+    }
+
+    @Test
+    fun `a layout is recognised by how many keypoints it carries`() {
+        assertEquals(OpenPoseLayout.BODY_18, OpenPoseLayout.forKeypointCount(18))
+        assertEquals(OpenPoseLayout.BODY_17, OpenPoseLayout.forKeypointCount(17))
+        assertEquals(OpenPoseLayout.DW_BODY_FOOT, OpenPoseLayout.forKeypointCount(23))
+        assertEquals(OpenPoseLayout.DW_WHOLEBODY, OpenPoseLayout.forKeypointCount(133))
+    }
+
+    @Test
     fun `a rendered skeleton is read back into keypoints`() {
         val pixels = IntArray(size * size) { 0xFF000000.toInt() }
         // Every joint at a known spot, in its own palette colour.
-        val placed = OpenPoseLayout.BODY_18.order.mapIndexed { index, joint ->
+        val placed = OpenPoseLayout.BODY_18.joints.mapIndexed { index, joint ->
             val cx = 30 + (index % 6) * 28
             val cy = 30 + (index / 6) * 55
             disc(pixels, cx, cy, 7, OpenPoseStyle.palette[index])
@@ -308,14 +367,14 @@ class OpenPoseImageReaderTest {
 
         val found = assertNotNull(
             OpenPoseImageReader.read(pixels, size, size)
-                ?.get(OpenPoseLayout.BODY_18.order[4])
+                ?.get(OpenPoseLayout.BODY_18.joints[4])
                 ?: run {
                     // Not enough other joints for a whole body; read the disc
                     // directly by giving the rest of the palette somewhere too.
-                    OpenPoseLayout.BODY_18.order.forEachIndexed { index, _ ->
+                    OpenPoseLayout.BODY_18.joints.forEachIndexed { index, _ ->
                         if (index != 4) disc(pixels, 10 + index * 3, 190, 4, OpenPoseStyle.palette[index])
                     }
-                    OpenPoseImageReader.read(pixels, size, size)?.get(OpenPoseLayout.BODY_18.order[4])
+                    OpenPoseImageReader.read(pixels, size, size)?.get(OpenPoseLayout.BODY_18.joints[4])
                 },
         )
         assertEquals(40 / size.toFloat(), found.x, 0.03f)

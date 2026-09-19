@@ -75,6 +75,7 @@ import com.stratum.feature.forge.PoseRun
 import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.sprite.SpriteMapper
 import com.stratum.core.domain.sprite.SpriteNamespace
+import com.stratum.core.domain.sprite.SpriteSheet
 import com.stratum.core.domain.ai.ImageReference
 import com.stratum.core.domain.ai.PoseScript
 import com.stratum.core.domain.ai.PoseStep
@@ -133,6 +134,17 @@ fun StratumApp(
     // never opened the class forge should get.
     var heroClassId by remember { mutableStateOf<String?>(null) }
 
+    /**
+     * The art the player picked, independent of which class they are playing.
+     *
+     * A class and a look are two different choices, and tying them together
+     * meant a character you had drawn could only be worn by binding it to a
+     * class in another screen first -- so the obvious act of "use this one"
+     * had no button anywhere. Null falls back to the class's own art, which is
+     * what a player who has never drawn anything gets.
+     */
+    var heroSheetId by remember { mutableStateOf<String?>(null) }
+
     // A new seed per run, but stable across recomposition so walking around does
     // not regenerate the world under the player.
     var seed by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -162,7 +174,9 @@ fun StratumApp(
     // Keyed on the chosen class: the player's art is a property of who they are
     // playing, and resolving it without that was the whole bug — every class
     // was drawn with whichever hero sheet happened to be newest.
-    val spriteResolver = remember(spriteRevision, contentWithSprites, heroClassId, equippedWeaponId) {
+    val spriteResolver = remember(
+        spriteRevision, contentWithSprites, heroClassId, heroSheetId, equippedWeaponId,
+    ) {
         // The resolver is asked for a sprite on every drawn frame, for every
         // actor, so anything built here has to be built once and kept. A rig is
         // a map the size of the sheet's frame count; rebuilding it per frame
@@ -186,6 +200,15 @@ fun StratumApp(
             val candidates = when (key) {
                 SpriteKey.Player -> {
                     val chosen = heroClassId ?: contentWithSprites.heroClasses.firstOrNull()?.id
+                    // What the player picked outright comes first: it is the
+                    // most explicit thing anybody has said about how they want
+                    // to look, and it should not be overridden by what a class
+                    // happens to carry.
+                    listOfNotNull(
+                        heroSheetId?.let { id ->
+                            contentWithSprites.spriteSheets.firstOrNull { it.id == id }
+                        },
+                    ) +
                     // A player who has drawn art but assigned none still gets
                     // to see it, rather than art they made sitting unused
                     // because they missed a picker.
@@ -269,6 +292,11 @@ fun StratumApp(
             heroClasses = content.heroClasses,
             selectedClassId = heroClassId ?: content.heroClasses.firstOrNull()?.id,
             onSelectClass = { heroClassId = it },
+            characterSheets = remember(spriteSheets) {
+                spriteSheets.filter { SpriteNamespace.servesHero(it.id) }
+            },
+            selectedSheetId = heroSheetId,
+            onSelectSheet = { id -> heroSheetId = if (heroSheetId == id) null else id },
             idleFrameFor = heroPortrait,
             onBuildClass = { destination = Destination.CLASSES },
             onDescend = {
@@ -676,6 +704,10 @@ private fun HomeScreen(
     heroClasses: List<HeroClassDefinition>,
     selectedClassId: String?,
     onSelectClass: (String) -> Unit,
+    /** Art the player can wear, whichever class they are playing. */
+    characterSheets: List<SpriteSheet> = emptyList(),
+    selectedSheetId: String? = null,
+    onSelectSheet: (String) -> Unit = {},
     /** The chosen character's art, so the picker shows who rather than what. */
     idleFrameFor: (String) -> DrawableSprite? = { null },
     onBuildClass: () -> Unit,
@@ -747,6 +779,35 @@ private fun HomeScreen(
 
             // The class is chosen before the run, not after: it decides the
             // spawn, the starting weapon and the skill bar.
+            // The look, before the class. Two separate choices: what you are
+            // playing and what you look like. They used to be one, so the only
+            // way to wear a character you had drawn was to go and bind it to a
+            // class somewhere else first.
+            if (characterSheets.isNotEmpty()) {
+                Text(
+                    text = "Character",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.inkMuted,
+                )
+                Spacer(Modifier.height(Space.small))
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(Space.small),
+                ) {
+                    items(characterSheets, key = SpriteSheet::id) { sheet ->
+                        StratumChip(
+                            label = sheet.name,
+                            selected = sheet.id == selectedSheetId,
+                            // Tapping the chosen one again clears it, which is
+                            // how a player goes back to the class's own art
+                            // without hunting for a "none" entry.
+                            onClick = { onSelectSheet(sheet.id) },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(Space.medium))
+            }
+
             if (heroClasses.isNotEmpty()) {
                 LazyRow(
                     modifier = Modifier.fillMaxWidth(),
@@ -765,7 +826,7 @@ private fun HomeScreen(
                     // afford. A name in a list says which class; it does not
                     // say which of the four characters you drew this is, and
                     // that is the thing a person actually chooses by.
-                    val drawn = remember(hero.id, selectedClassId, idleFrameFor) {
+                    val drawn = remember(hero.id, selectedClassId, selectedSheetId, idleFrameFor) {
                         idleFrameFor(hero.id)
                     }
                     Spacer(Modifier.height(Space.medium))

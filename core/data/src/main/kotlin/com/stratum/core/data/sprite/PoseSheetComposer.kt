@@ -68,15 +68,29 @@ object PoseSheetComposer {
         // released. Doing this work twice costs a second and is the price of
         // not holding the whole set in memory at once.
         val bounds = HashMap<String, SourceRect>()
-        var widest = 0
+        val anchors = HashMap<String, Int>()
+        // Measured either side of where the figure stands, not as one width.
+        // A cell has to hold the furthest reach in each direction *from the
+        // anchor*, because that is the point every frame is hung from; a cell
+        // sized by the widest content box would clip a lunge whose weight is
+        // over one foot.
+        var leftReach = 0
+        var rightReach = 0
         var tallest = 0
         for (cell in plan.cells) {
             val measured = measure(loadPose(cell.key)) ?: continue
             bounds[cell.key] = measured
-            if (measured.width > widest) widest = measured.width
+            val anchor = anchorOf(loadPose(cell.key), measured)
+                ?: (measured.left + measured.width / 2)
+            anchors[cell.key] = anchor
+            if (anchor - measured.left > leftReach) leftReach = anchor - measured.left
+            if (measured.right - anchor > rightReach) rightReach = measured.right - anchor
             if (measured.height > tallest) tallest = measured.height
         }
         if (bounds.isEmpty()) return null
+
+        // Symmetric about the anchor, so centring the anchor centres the cell.
+        val widest = 2 * maxOf(leftReach, rightReach)
 
         // Now that the figure's proportions are known, the cells are cut to
         // fit it. A square cell would spend two thirds of its width on empty
@@ -120,9 +134,21 @@ object PoseSheetComposer {
             val width = (rect.width * scale).roundToInt().coerceAtLeast(1)
             val height = (rect.height * scale).roundToInt().coerceAtLeast(1)
             val cellRect = fitted.rectFor(cell)
-            // Centred across and standing on the floor of the cell: the same
-            // anchoring the atlas baker uses, and for the same reason.
-            val left = cellRect.left + (fitted.cellWidth - width) / 2
+            // Hung from where the figure meets the ground, and standing on the
+            // floor of the cell.
+            //
+            // Not centred on the content box, which is what this used to do.
+            // An animation is a body moving its limbs while its feet stay put,
+            // so the box is the wrong reference: an arm coming up widens it
+            // and shifts its centre, and the body slides the other way to
+            // compensate. On a real walk that put the feet sixty-two pixels
+            // apart across a hundred and ninety-one pixel cell, which does not
+            // read as a walk with a wobble -- it reads as unrelated poses,
+            // because what the eye tracks between frames is the part that is
+            // supposed to be still.
+            val anchor = anchors[cell.key] ?: (rect.left + rect.width / 2)
+            val anchorOffset = ((anchor - rect.left) * scale).roundToInt()
+            val left = cellRect.left + fitted.cellWidth / 2 - anchorOffset
             val top = cellRect.top + (fitted.cellHeight - height)
 
             canvas.drawBitmap(
@@ -142,6 +168,22 @@ object PoseSheetComposer {
         // fitted.sheet, not plan.sheet: the frame size the runtime cuts on has
         // to be the size the frames were actually drawn at.
         return ComposedSheet(sheet = fitted.sheet, bytes = out.toByteArray(), missing = missing)
+    }
+
+    /** Where the figure meets the ground, in the source image's coordinates. */
+    private fun anchorOf(bytes: ByteArray?, rect: SourceRect): Int? {
+        if (bytes == null) return null
+        val bitmap = SpriteAtlasBaker.decode(bytes) ?: return null
+        val width = bitmap.width
+        val height = bitmap.height
+        if (width <= 0 || height <= 0) {
+            bitmap.recycle()
+            return null
+        }
+        val pixels = SpriteAtlasBaker.pixelsOf(bitmap)
+        bitmap.recycle()
+        val keyed = SpriteKeying.key(pixels, width, height)
+        return SpriteSlicing.groundAnchorX(keyed.pixels, width, height, rect)
     }
 
     /** The box the figure actually occupies, once the chroma is gone. */

@@ -50,6 +50,10 @@ object OpenPoseImageReader {
 
         val keypoints = HashMap<OpenPoseJoint, OpenPoseKeypoint>()
         OpenPoseLayout.BODY_18.order.forEachIndexed { index, joint ->
+            // BODY_18 has no empty slots, so this cannot happen; the type says
+            // it might because whole-body layouts carry face and finger
+            // positions this model does not name.
+            if (joint == null) return@forEachIndexed
             val color = OpenPoseStyle.palette[index]
             val found = discOf(pixels, width, height, color, tolerance)
             keypoints[joint] = found ?: OpenPoseKeypoint(0f, 0f, 0f)
