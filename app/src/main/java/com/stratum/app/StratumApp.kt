@@ -562,7 +562,16 @@ fun StratumApp(
         Destination.MAPPER -> {
             val mapperViewModel: SpriteMapperViewModel = viewModel(
                 factory = SpriteMapperViewModel.factory(
-                    openProject = ai.spriteProjects::load,
+                    openProject = { sheetId ->
+                        // Only resume a project that was cut from the art the
+                        // library holds now. A regenerated character keeps its
+                        // id, so resuming blindly reopened the mapping made
+                        // from the previous version's pixels and showed the
+                        // old picture with no way to reach the new one.
+                        ai.spriteProjects.load(sheetId)?.takeIf {
+                            ai.spriteProjects.matchesSource(sheetId, ai.sprites.bytesFor(sheetId))
+                        }
+                    },
                     sourcePixels = { atlas ->
                         ai.spriteProjects.sourceFor(atlas.id)?.let(SpriteAtlasBaker::pixelsOf)
                     },

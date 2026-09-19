@@ -23,6 +23,7 @@ import com.stratum.core.domain.sprite.PoseGuideStyle
 import com.stratum.core.domain.sprite.PoseGuides
 import com.stratum.core.domain.sprite.PoseSheetPlan
 import com.stratum.core.domain.sprite.PoseSheetPlanner
+import com.stratum.core.domain.sprite.SpriteNamespace
 import com.stratum.core.domain.sprite.SpriteSheet
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -102,7 +103,7 @@ class PoseForgeViewModel(
     }
 
     fun updateSubject(subject: String) {
-        val setId = setIdFor(subject)
+        val setId = setIdFor(subject, _state.value.role)
         _state.value = _state.value.copy(
             subject = subject,
             setId = setId,
@@ -181,6 +182,42 @@ class PoseForgeViewModel(
 
     fun updateStyle(style: String) {
         _state.value = _state.value.copy(style = style)
+    }
+
+    /**
+     * Changes what the character is for, and moves it.
+     *
+     * The role is part of the id, so switching it points at a different set.
+     * Re-reading what is on disk under the new id is the honest thing to do:
+     * the alternative is a screen showing forty drawn poses that the next
+     * generation will not find.
+     */
+    fun selectRole(role: CharacterRole) {
+        val current = _state.value
+        val setId = setIdFor(current.subject, role)
+        _state.value = current.copy(
+            role = role,
+            setId = setId,
+            hasReference = setId?.let(hasReference) ?: false,
+            drawn = setId?.let(posesDrawn).orEmpty(),
+            guides = setId?.let(loadGuides) ?: PoseGuides(),
+            savedSheet = null,
+        )
+    }
+
+    /**
+     * Sets how many frames one animation gets.
+     *
+     * Only ever changes that one animation. Frames already drawn are left
+     * alone: the sampling takes instructions from the start of the cycle, so
+     * frame zero of a four frame walk and of a twelve frame walk are the same
+     * pose, and raising the count adds work rather than invalidating it.
+     */
+    fun selectFrames(state: AnimationState, count: Int) {
+        val wanted = count.coerceIn(PoseScript.MIN_FRAMES, PoseScript.MAX_FRAMES)
+        _state.value = _state.value.copy(
+            frames = _state.value.frames + (state to wanted),
+        )
     }
 
     fun selectScope(scope: PoseScope) {
@@ -489,6 +526,14 @@ class PoseForgeViewModel(
         _state.value = _state.value.copy(
             subject = character.name,
             setId = character.setId,
+            // Read back off the id rather than left as whatever was last
+            // picked: opening an enemy and then generating would otherwise
+            // write the next frames into the hero's set.
+            role = if (SpriteNamespace.servesMonster(character.setId)) {
+                CharacterRole.ENEMY
+            } else {
+                CharacterRole.HERO
+            },
             hasReference = hasReference(character.setId),
             drawn = posesDrawn(character.setId),
             guides = loadGuides(character.setId),
@@ -549,9 +594,9 @@ class PoseForgeViewModel(
         }
     }
 
-    private fun setIdFor(subject: String): String? {
+    private fun setIdFor(subject: String, role: CharacterRole): String? {
         val slug = subject.lowercase().replace(NON_ID, "_").trim('_').take(MAX_SLUG)
-        return if (slug.isBlank()) null else "pose:$slug"
+        return if (slug.isBlank()) null else "${role.namespace}$slug"
     }
 
     companion object {
@@ -598,18 +643,58 @@ class PoseForgeViewModel(
 }
 
 /** How much of a character to draw. Every state is more calls and more money. */
-enum class PoseScope(val label: String, val script: PoseScript) {
+/**
+ * What a character is being drawn for.
+ *
+ * Separate from [PoseScope], which says how many animations to draw. They
+ * correlate -- an enemy usually needs fewer -- but they are not the same
+ * question, and answering both with one control is what produced a world in
+ * which every monster wore the player's face. The choice is written into the
+ * set id, so the art is filed where the game looks for that kind of actor.
+ */
+enum class CharacterRole(val label: String, val namespace: String) {
+    HERO("Hero", SpriteNamespace.HERO),
+    ENEMY("Enemy", SpriteNamespace.MONSTER),
+}
+
+enum class PoseScope(val label: String) {
     /** Idle, walk, attack, death: what an enemy is actually seen doing. */
-    ENEMY("Enemy", PoseScript.enemy()),
+    ENEMY("Enemy"),
 
     /** Everything, for the character a player looks at all session. */
-    FULL("Full character", PoseScript.full()),
+    FULL("Full character");
+
+    /** The script for this scope at the frame counts the person chose. */
+    fun scriptFor(frames: Map<AnimationState, Int>): PoseScript = when (this) {
+        ENEMY -> PoseScript.enemy(frames)
+        FULL -> PoseScript.full(frames)
+    }
+
+    val states: List<AnimationState>
+        get() = when (this) {
+            ENEMY -> listOf(
+                AnimationState.IDLE,
+                AnimationState.WALK,
+                AnimationState.ATTACK,
+                AnimationState.DIE,
+            )
+            FULL -> AnimationState.generatedRowOrder
+        }
 }
 
 data class PoseForgeUiState(
     val subject: String = "",
     val style: String = "",
     val scope: PoseScope = PoseScope.ENEMY,
+    /** Whether this character is the player's or something it meets. */
+    val role: CharacterRole = CharacterRole.ENEMY,
+    /**
+     * How many frames each animation gets.
+     *
+     * Per state rather than one number, because the states do not need the
+     * same count: an idle is watched for minutes and a death is seen once.
+     */
+    val frames: Map<AnimationState, Int> = emptyMap(),
     val cellSize: Int = PoseSheetPlanner.DEFAULT_CELL,
     val setId: String? = null,
     val hasReference: Boolean = false,
@@ -631,7 +716,11 @@ data class PoseForgeUiState(
     /** Every character on disk, so one can be picked up without retyping it. */
     val characters: List<SavedCharacter> = emptyList(),
 ) {
-    val script: PoseScript get() = scope.script
+    val script: PoseScript get() = scope.scriptFor(frames)
+
+    /** How many frames [state] is set to, falling back to the default. */
+    fun framesFor(state: AnimationState): Int =
+        frames[state] ?: PoseScript.DEFAULT_FRAMES
 
     /** Steps with an imported pose behind them rather than a built-in one. */
     fun isImported(step: PoseStep): Boolean = step.key in guides.imported

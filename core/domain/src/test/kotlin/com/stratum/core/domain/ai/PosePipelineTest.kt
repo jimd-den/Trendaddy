@@ -2,6 +2,7 @@ package com.stratum.core.domain.ai
 
 import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.sprite.AtlasBaker
+import com.stratum.core.domain.sprite.MocapPoses
 import com.stratum.core.domain.sprite.PoseCell
 import com.stratum.core.domain.sprite.PoseSheetPlanner
 import kotlinx.coroutines.test.runTest
@@ -51,6 +52,71 @@ class PoseScriptTest {
         // Six across and seven down, which is the shape the sheet comes out.
         assertEquals(6, script.frameCounts().values.max())
         assertEquals(7, script.frameCounts().size)
+    }
+
+    @Test
+    fun `an animation can be asked for more frames, and they are all different`() {
+        AnimationState.entries.forEach { state ->
+            PoseScript.FRAME_CHOICES.forEach { count ->
+                val poses = PoseScript.posesFor(state, count)
+                assertEquals(count, poses.size, "$state at $count frames")
+                // The whole point of asking for more: paying twice for the
+                // same instruction would buy a duplicate frame, not a
+                // smoother animation.
+                assertEquals(
+                    count,
+                    poses.toSet().size,
+                    "$state at $count frames repeated an instruction",
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `raising the frame count adds work instead of invalidating it`() {
+        // Frames already drawn are keyed by state and index. If a longer
+        // script renumbered them, every frame already paid for would be
+        // silently wrong, and nothing would say so.
+        val four = PoseScript.posesFor(AnimationState.WALK, 4)
+        val twelve = PoseScript.posesFor(AnimationState.WALK, 12)
+        assertEquals(four.first(), twelve.first())
+        assertTrue(four.all { it in twelve }, "a shorter walk is not a subset of a longer one")
+    }
+
+    @Test
+    fun `each animation is counted on its own`() {
+        val script = PoseScript.full(
+            mapOf(AnimationState.IDLE to 12, AnimationState.DIE to 3),
+        )
+        assertEquals(12, script.stepsFor(AnimationState.IDLE).size)
+        assertEquals(3, script.stepsFor(AnimationState.DIE).size)
+        // Everything unnamed keeps the default rather than following the last
+        // thing that was set.
+        assertEquals(
+            PoseScript.DEFAULT_FRAMES,
+            script.stepsFor(AnimationState.WALK).size,
+        )
+    }
+
+    @Test
+    fun `every step of every frame count has a skeleton to pose from`() {
+        // The guides are authored at one length and the script can now be
+        // asked for another, so the two have to meet for any count rather
+        // than only at the one they were written at.
+        AnimationState.entries.forEach { state ->
+            PoseScript.FRAME_CHOICES.forEach { count ->
+                val posed = (0 until count).map { index ->
+                    MocapPoses.poseFor(state, index, count)
+                }
+                assertEquals(count, posed.size)
+                if (count > 1) {
+                    assertTrue(
+                        posed.toSet().size > 1,
+                        "$state at $count frames posed every frame identically",
+                    )
+                }
+            }
+        }
     }
 
     @Test

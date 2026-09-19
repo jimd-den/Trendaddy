@@ -46,7 +46,14 @@ class AiWiring(context: Context) {
      * resumed after a failure and re-packed at another frame size without
      * paying for a single generation twice.
      */
-    val poses = PoseLibrary(context)
+    val poses = PoseLibrary(context).apply {
+        // Reading a set used to create its folder, and the forge probes for
+        // one on every keystroke of the subject line -- so every device that
+        // ran that build carries a folder for every prefix anyone ever typed.
+        // They list as characters with no poses. Swept once on startup rather
+        // than left for the person to delete by hand, twelve at a time.
+        forgetEmptySets()
+    }
 
     /**
      * Which skeletons each character was drawn against.

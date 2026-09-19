@@ -53,8 +53,10 @@ import com.stratum.core.designsystem.theme.Space
 import com.stratum.core.designsystem.theme.Stroke
 import com.stratum.core.designsystem.theme.StratumTheme
 import com.stratum.core.designsystem.theme.safeContent
+import com.stratum.core.domain.ai.PoseScript
 import com.stratum.core.domain.ai.PoseStep
 import com.stratum.core.domain.ai.SavedCharacter
+import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.sprite.PoseGuideMode
 import com.stratum.core.domain.sprite.PoseGuideStyle
 import com.stratum.core.domain.sprite.SpriteValidation
@@ -114,6 +116,8 @@ fun PoseForgeScreen(
         onSubjectChange = viewModel::updateSubject,
         onStyleChange = viewModel::updateStyle,
         onScopeChange = viewModel::selectScope,
+        onRoleChange = viewModel::selectRole,
+        onFramesChange = viewModel::selectFrames,
         onCellSizeChange = viewModel::selectCellSize,
         onDrawReference = viewModel::drawReferencePose,
         onBuildAnimations = viewModel::buildAnimations,
@@ -144,6 +148,8 @@ fun PoseForgeContent(
     onSubjectChange: (String) -> Unit = {},
     onStyleChange: (String) -> Unit = {},
     onScopeChange: (PoseScope) -> Unit = {},
+    onRoleChange: (CharacterRole) -> Unit = {},
+    onFramesChange: (AnimationState, Int) -> Unit = { _, _ -> },
     onCellSizeChange: (Int) -> Unit = {},
     onDrawReference: () -> Unit = {},
     onBuildAnimations: () -> Unit = {},
@@ -214,7 +220,10 @@ fun PoseForgeContent(
         SavedPanel(state, onOpenCharacter, onForgetCharacter)
 
         Spacer(Modifier.height(Space.medium))
-        CharacterPanel(state, onSubjectChange, onStyleChange, onScopeChange)
+        CharacterPanel(
+            state, onSubjectChange, onStyleChange, onScopeChange, onRoleChange,
+            onFramesChange,
+        )
 
         Spacer(Modifier.height(Space.medium))
         ReferencePanel(state, reference, onDrawReference)
@@ -311,6 +320,8 @@ private fun CharacterPanel(
     onSubjectChange: (String) -> Unit,
     onStyleChange: (String) -> Unit,
     onScopeChange: (PoseScope) -> Unit,
+    onRoleChange: (CharacterRole) -> Unit,
+    onFramesChange: (AnimationState, Int) -> Unit,
 ) {
     val colors = StratumTheme.colors
 
@@ -324,6 +335,28 @@ private fun CharacterPanel(
             enabled = !state.busy,
             minLines = 2,
         )
+
+        // Asked before anything is drawn, because it decides where the art is
+        // filed and therefore what the game does with it. Left unasked, a
+        // character became both the player and every monster at once.
+        Spacer(Modifier.height(Space.small))
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(Space.small),
+        ) {
+            Text(
+                text = "Drawn for",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkMuted,
+            )
+            CharacterRole.entries.forEach { option ->
+                StratumChip(
+                    label = option.label,
+                    selected = state.role == option,
+                    onClick = { onRoleChange(option) },
+                )
+            }
+        }
 
         Spacer(Modifier.height(Space.small))
         Row(
@@ -360,11 +393,44 @@ private fun CharacterPanel(
             }
         }
 
+        // One row per animation, because the states do not want the same
+        // count: an idle is looked at for minutes on end and a death is seen
+        // once. A single number either starves the idle or pays for frames the
+        // death will never show.
+        Spacer(Modifier.height(Space.medium))
+        Text(
+            text = "Frames per animation",
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.inkMuted,
+        )
+        state.scope.states.forEach { animation ->
+            Spacer(Modifier.height(Space.small))
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(Space.small),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = animation.name.lowercase().replaceFirstChar { it.uppercase() },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.inkMuted,
+                    modifier = Modifier.width(SIDE_LABEL),
+                )
+                PoseScript.FRAME_CHOICES.forEach { count ->
+                    StratumChip(
+                        label = "$count",
+                        selected = state.framesFor(animation) == count,
+                        onClick = { onFramesChange(animation, count) },
+                    )
+                }
+            }
+        }
+
         Spacer(Modifier.height(Space.small))
         // Said in generations rather than in states, because that is the number
         // that costs money and takes minutes.
         Text(
-            text = "${state.scope.script.steps.size} poses, one generation each, " +
+            text = "${state.script.steps.size} poses, one generation each, " +
                 "plus the reference.",
             style = MaterialTheme.typography.labelSmall,
             color = colors.inkMuted,
@@ -838,3 +904,6 @@ private val REFERENCE_HEIGHT = 320.dp
 private val SHEET_HEIGHT = 240.dp
 /** Enough for "special" without pushing the pose squares off a narrow phone. */
 private const val WIDTH_OF_LABEL = 0.3f
+
+/** Wide enough for the longest animation name, so the chip rows line up. */
+private val SIDE_LABEL = 72.dp

@@ -425,9 +425,17 @@ private fun DrawScope.drawSprite(
     val frame = sheet.frameFor(playback.frameIn(sheet), facing)
     val rect = sheet.frameRect(frame)
 
-    // Drawn a little larger than a block so a character reads against terrain.
-    val baseWidth = projection.tileWidth * projection.zoom * SPRITE_SCALE
-    val baseHeight = baseWidth * (rect.height.toFloat() / rect.width.coerceAtLeast(1))
+    // Sized by height, not width.
+    //
+    // Width was the anchor while every frame was square, and it stopped being
+    // safe the moment frames were cut to the figure: a lunging character
+    // packs into a wide cell and a standing one into a narrow cell, so
+    // anchoring on width made the same person a different height in the world
+    // depending on which poses their sheet happened to contain. Height is
+    // what a viewer reads as scale -- a character is "about two tiles tall"
+    // -- and it is the measurement that stays put across a whole set.
+    val baseHeight = projection.tileWidth * projection.zoom * SPRITE_HEIGHT_TILES
+    val baseWidth = baseHeight * (rect.width.toFloat() / rect.height.coerceAtLeast(1))
 
     // Motion the art does not supply. A clip playing frames drawn for another
     // state, or a still held as an animation, gets the difference made up here;
@@ -1006,7 +1014,15 @@ private const val RISE_FRACTION = 0.85f
 private const val BASE_TEXT_FRACTION = 0.26f
 private const val SPREAD_BUCKETS = 5
 private const val SPREAD_FRACTION = 0.16f
-private const val SPRITE_SCALE = 1.35f
+/**
+ * How tall a character stands, in tile widths.
+ *
+ * A tile width rather than a tile height because the tile is a diamond: its
+ * width is the full footprint and its height is the same footprint squashed by
+ * the camera, so measuring against the width is measuring against the ground
+ * the character is standing on.
+ */
+private const val SPRITE_HEIGHT_TILES = 1.9f
 /** Fraction of a tile width. Was 0.22; a player you cannot find is not a player. */
 private const val PLAYER_RADIUS = 0.34f
 /**

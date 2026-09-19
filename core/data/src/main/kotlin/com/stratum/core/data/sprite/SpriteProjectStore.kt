@@ -68,6 +68,29 @@ class SpriteProjectStore(context: Context) {
         File(root, "${slugFor(atlasId)}$IMAGE_SUFFIX").isFile
 
     /**
+     * Whether the project was cut from the art the library now holds.
+     *
+     * A project keeps its own copy of the source, which is what stops
+     * re-cutting from damaging the only copy of an image. The cost is that the
+     * copy can go stale, and it does so silently: a generated character keeps
+     * its id when it is drawn again, so opening the mapper on a character
+     * regenerated yesterday reopened the project made from the *first*
+     * version's pixels. The new art existed, was listed, was drawn in the
+     * world, and could not be mapped -- the editor simply showed the old one.
+     *
+     * Compared by content rather than by timestamp. A file copied or restored
+     * carries whatever date the copy was made, and the question here is
+     * whether these are the same pixels.
+     */
+    fun matchesSource(atlasId: String, current: ByteArray?): Boolean {
+        if (current == null) return true
+        val file = File(root, "${slugFor(atlasId)}$IMAGE_SUFFIX")
+        if (!file.isFile) return false
+        if (file.length() != current.size.toLong()) return false
+        return runCatching { file.readBytes().contentEquals(current) }.getOrDefault(false)
+    }
+
+    /**
      * The untouched source art. Not cached: it is read when the editor opens
      * and when a bake runs, and holding a full-size bitmap between those is a
      * few megabytes doing nothing.
