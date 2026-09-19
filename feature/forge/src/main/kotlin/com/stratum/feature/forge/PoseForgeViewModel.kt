@@ -13,6 +13,7 @@ import com.stratum.core.domain.ai.PoseRunPolicy
 import com.stratum.core.domain.ai.PoseScript
 import com.stratum.core.domain.ai.RunDecision
 import com.stratum.core.domain.ai.PoseStep
+import com.stratum.core.domain.ai.SavedCharacter
 import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.sprite.PackedSheet
 import com.stratum.core.domain.sprite.Pose
@@ -70,11 +71,21 @@ class PoseForgeViewModel(
     private val posesDrawn: (String) -> Set<String>,
     /** Composites the set into a sheet and puts it in the sprite library. */
     private val composeSheet: (String, PoseSheetPlan) -> PackedSheet?,
+    /** Characters already on disk, newest first, so one can be picked up again. */
+    private val savedCharacters: () -> List<SavedCharacter>,
+    private val deleteCharacter: (String) -> Unit,
+    /** Writes the packed sheet out where the rest of the device can reach it. */
+    private val exportSheet: (String, String) -> Boolean,
+    /** Writes every full-size pose out as one archive. */
+    private val exportPoses: (String, String) -> Boolean,
     private val isProviderConfigured: () -> Boolean,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(
-        PoseForgeUiState(providerConfigured = isProviderConfigured()),
+        PoseForgeUiState(
+            providerConfigured = isProviderConfigured(),
+            characters = savedCharacters(),
+        ),
     )
     val state: StateFlow<PoseForgeUiState> = _state.asStateFlow()
 
@@ -86,6 +97,7 @@ class PoseForgeViewModel(
             providerConfigured = isProviderConfigured(),
             hasReference = current.setId?.let(hasReference) ?: false,
             drawn = current.setId?.let(posesDrawn).orEmpty(),
+            characters = savedCharacters(),
         )
     }
 
@@ -465,6 +477,78 @@ class PoseForgeViewModel(
      * the same description again finds the same set rather than paying for it
      * twice.
      */
+    /**
+     * Opens a character that is already on disk.
+     *
+     * Typing the subject again used to be the only way back to a set, because
+     * the id is derived from it -- so a character was reachable only by
+     * remembering, exactly, what it had been called. Forty generations of work
+     * behind a spelling test.
+     */
+    fun openCharacter(character: SavedCharacter) {
+        _state.value = _state.value.copy(
+            subject = character.name,
+            setId = character.setId,
+            hasReference = hasReference(character.setId),
+            drawn = posesDrawn(character.setId),
+            guides = loadGuides(character.setId),
+            savedSheet = null,
+            failures = emptyMap(),
+            message = null,
+            error = null,
+        )
+    }
+
+    fun forgetCharacter(setId: String) {
+        deleteCharacter(setId)
+        val current = _state.value
+        val cleared = current.setId == setId
+        _state.value = current.copy(
+            characters = savedCharacters(),
+            setId = if (cleared) null else current.setId,
+            subject = if (cleared) "" else current.subject,
+            hasReference = if (cleared) false else current.hasReference,
+            drawn = if (cleared) emptySet() else current.drawn,
+            savedSheet = if (cleared) null else current.savedSheet,
+            message = "Deleted.",
+        )
+    }
+
+    /**
+     * Hands the packed sheet to the device.
+     *
+     * Only offered once a sheet has been packed: exporting the set before that
+     * would write whatever the last pack produced, which may be nothing or may
+     * be several runs old, and neither is what the button appears to promise.
+     */
+    fun exportSheet() {
+        val sheet = _state.value.savedSheet
+        if (sheet == null) {
+            _state.value = _state.value.copy(error = "Pack the sheet first, then export it.")
+            return
+        }
+        val name = _state.value.subject.trim().ifBlank { sheet.name }
+        _state.value = if (exportSheet(sheet.id, name)) {
+            _state.value.copy(message = "Sheet exported.", error = null)
+        } else {
+            _state.value.copy(error = "The sheet could not be exported.")
+        }
+    }
+
+    fun exportPoses() {
+        val setId = _state.value.setId
+        if (setId == null || _state.value.drawn.isEmpty()) {
+            _state.value = _state.value.copy(error = "There are no poses to export yet.")
+            return
+        }
+        val name = _state.value.subject.trim().ifBlank { "character" }
+        _state.value = if (exportPoses(setId, name)) {
+            _state.value.copy(message = "Poses exported.", error = null)
+        } else {
+            _state.value.copy(error = "The poses could not be exported.")
+        }
+    }
+
     private fun setIdFor(subject: String): String? {
         val slug = subject.lowercase().replace(NON_ID, "_").trim('_').take(MAX_SLUG)
         return if (slug.isBlank()) null else "pose:$slug"
@@ -496,13 +580,18 @@ class PoseForgeViewModel(
             dropPose: (String, String) -> Unit,
             posesDrawn: (String) -> Set<String>,
             composeSheet: (String, PoseSheetPlan) -> PackedSheet?,
+            savedCharacters: () -> List<SavedCharacter> = { emptyList() },
+            deleteCharacter: (String) -> Unit = {},
+            exportSheet: (String, String) -> Boolean = { _, _ -> false },
+            exportPoses: (String, String) -> Boolean = { _, _ -> false },
             isProviderConfigured: () -> Boolean,
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T = PoseForgeViewModel(
                 drawReference, drawPose, guideFor, readGuideImage, readGuideJson, loadGuides,
                 saveGuides, saveReference, loadReference, hasReference, savePose, dropPose,
-                posesDrawn, composeSheet, isProviderConfigured,
+                posesDrawn, composeSheet, savedCharacters, deleteCharacter, exportSheet,
+                exportPoses, isProviderConfigured,
             ) as T
         }
     }
@@ -539,6 +628,8 @@ data class PoseForgeUiState(
     val error: String? = null,
     /** Which poses this character is drawn against, and how they are drawn. */
     val guides: PoseGuides = PoseGuides(),
+    /** Every character on disk, so one can be picked up without retyping it. */
+    val characters: List<SavedCharacter> = emptyList(),
 ) {
     val script: PoseScript get() = scope.script
 

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -31,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
@@ -52,6 +54,7 @@ import com.stratum.core.designsystem.theme.Stroke
 import com.stratum.core.designsystem.theme.StratumTheme
 import com.stratum.core.designsystem.theme.safeContent
 import com.stratum.core.domain.ai.PoseStep
+import com.stratum.core.domain.ai.SavedCharacter
 import com.stratum.core.domain.sprite.PoseGuideMode
 import com.stratum.core.domain.sprite.PoseGuideStyle
 import com.stratum.core.domain.sprite.SpriteValidation
@@ -122,6 +125,10 @@ fun PoseForgeScreen(
         onGuideModeChange = viewModel::selectGuideMode,
         onGuideStyleChange = viewModel::selectGuideStyle,
         onClearImported = viewModel::clearImported,
+        onOpenCharacter = viewModel::openCharacter,
+        onForgetCharacter = viewModel::forgetCharacter,
+        onExportSheet = viewModel::exportSheet,
+        onExportPoses = viewModel::exportPoses,
         onDismiss = viewModel::dismissMessage,
         onBack = onBack,
         onOpenSettings = onOpenSettings,
@@ -143,6 +150,10 @@ fun PoseForgeContent(
     onStop: () -> Unit = {},
     onBuildSheet: () -> Unit = {},
     onRedrawPose: (String) -> Unit = {},
+    onOpenCharacter: (SavedCharacter) -> Unit = {},
+    onForgetCharacter: (String) -> Unit = {},
+    onExportSheet: () -> Unit = {},
+    onExportPoses: () -> Unit = {},
     onGuideModeChange: (PoseGuideMode) -> Unit = {},
     onGuideStyleChange: (PoseGuideStyle) -> Unit = {},
     onClearImported: (PoseStep) -> Unit = {},
@@ -200,6 +211,9 @@ fun PoseForgeContent(
         Notice(state.message, state.error, onDismiss)
 
         Spacer(Modifier.height(Space.large))
+        SavedPanel(state, onOpenCharacter, onForgetCharacter)
+
+        Spacer(Modifier.height(Space.medium))
         CharacterPanel(state, onSubjectChange, onStyleChange, onScopeChange)
 
         Spacer(Modifier.height(Space.medium))
@@ -215,9 +229,79 @@ fun PoseForgeContent(
         )
 
         Spacer(Modifier.height(Space.medium))
-        SheetPanel(state, sheetImage, onCellSizeChange, onBuildSheet)
+        SheetPanel(state, sheetImage, onCellSizeChange, onBuildSheet, onExportSheet, onExportPoses)
 
         Spacer(Modifier.height(Space.huge))
+    }
+}
+
+/**
+ * Every character already on disk.
+ *
+ * The set id is derived from the subject line, so before this the only route
+ * back to a character was to retype what it had been called, exactly. That put
+ * half an hour of generation and real money behind a spelling test, and there
+ * was no way to see what existed or to get rid of something that did not work.
+ */
+@Composable
+private fun SavedPanel(
+    state: PoseForgeUiState,
+    onOpen: (SavedCharacter) -> Unit,
+    onForget: (String) -> Unit,
+) {
+    if (state.characters.isEmpty()) return
+    val colors = StratumTheme.colors
+
+    StratumSection(
+        title = "Saved characters",
+        subtitle = "${state.characters.size} on this device",
+    ) {
+        state.characters.forEach { character ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = character.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (character.setId == state.setId) {
+                            colors.accent
+                        } else {
+                            colors.ink
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        // The pose count is the honest measure of progress:
+                        // a character with a reference and no poses is an
+                        // idea, not a character.
+                        text = buildString {
+                            append("${character.posesDrawn} pose(s)")
+                            if (!character.hasReference) append(" · no reference")
+                            if (character.sheetId != null) append(" · packed")
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.inkMuted,
+                    )
+                }
+                StratumAction(
+                    label = "Open",
+                    onClick = { onOpen(character) },
+                    emphasis = ActionEmphasis.SECONDARY,
+                    enabled = !state.busy,
+                )
+                Spacer(Modifier.width(Space.small))
+                StratumAction(
+                    label = "Delete",
+                    onClick = { onForget(character.setId) },
+                    emphasis = ActionEmphasis.QUIET,
+                    enabled = !state.busy,
+                )
+            }
+            Spacer(Modifier.height(Space.small))
+        }
     }
 }
 
@@ -628,6 +712,8 @@ private fun SheetPanel(
     sheetImage: ImageBitmap?,
     onCellSizeChange: (Int) -> Unit,
     onBuildSheet: () -> Unit,
+    onExportSheet: () -> Unit,
+    onExportPoses: () -> Unit,
 ) {
     val colors = StratumTheme.colors
 
@@ -684,6 +770,33 @@ private fun SheetPanel(
             onClick = onBuildSheet,
             emphasis = ActionEmphasis.PRIMARY,
             enabled = state.canBuildSheet,
+        )
+
+        // Both offered, because they answer different questions. The sheet is
+        // what an engine wants; the poses are the full-size originals, which
+        // are what a person wants in order to retouch a frame or pack the set
+        // differently later. Packing throws away most of the pixels.
+        Spacer(Modifier.height(Space.small))
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.small)) {
+            StratumAction(
+                label = "Export sheet",
+                onClick = onExportSheet,
+                emphasis = ActionEmphasis.SECONDARY,
+                enabled = !state.busy && state.savedSheet != null,
+            )
+            StratumAction(
+                label = "Export poses",
+                onClick = onExportPoses,
+                emphasis = ActionEmphasis.QUIET,
+                enabled = !state.busy && state.drawn.isNotEmpty(),
+            )
+        }
+        Spacer(Modifier.height(Space.small))
+        Text(
+            text = "Exports go to Downloads/${'"'}Stratum${'"'} and open the share sheet. " +
+                "The sheet is one PNG; the poses are every frame at full size, zipped.",
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.inkMuted,
         )
 
         if (state.completed in 1 until state.total) {

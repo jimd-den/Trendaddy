@@ -62,6 +62,9 @@ import com.stratum.core.data.sprite.PoseSheetComposer
 import com.stratum.core.data.sprite.WeaponPreparer
 import com.stratum.core.data.sprite.SpriteAtlasBaker
 import com.stratum.core.domain.sprite.SheetPreparation
+import com.stratum.core.domain.ai.SavedCharacter
+import com.stratum.core.data.sprite.SpriteExporter
+import com.stratum.core.domain.sprite.SpriteFallback
 import com.stratum.core.domain.sprite.SpriteMapper
 import com.stratum.core.domain.sprite.SpriteNamespace
 import com.stratum.core.domain.ai.ImageReference
@@ -171,13 +174,23 @@ fun StratumApp(
                     // to see it, rather than art they made sitting unused
                     // because they missed a picker.
                     listOfNotNull(chosen?.let(contentWithSprites::sheetForHero)) +
-                        contentWithSprites.spriteSheets
-                            .filter { SpriteNamespace.servesHero(it.id) }
+                        SpriteFallback.spread(
+                            contentWithSprites.spriteSheets
+                                .filter { SpriteNamespace.servesHero(it.id) },
+                            actorId = chosen.orEmpty(),
+                        )
                 }
                 is SpriteKey.Monster ->
                     listOfNotNull(contentWithSprites.sheetForEnemy(key.definitionId)) +
-                        contentWithSprites.spriteSheets
-                            .filter { SpriteNamespace.servesMonster(it.id) }
+                        // Spread by the enemy's id. Packs name enemies without
+                        // naming art for them -- the art is the thing being
+                        // generated -- so without this every kind of monster
+                        // in the world is drawn with the same picture.
+                        SpriteFallback.spread(
+                            contentWithSprites.spriteSheets
+                                .filter { SpriteNamespace.servesMonster(it.id) },
+                            actorId = key.definitionId,
+                        )
             }
 
             candidates.distinctBy { it.id }.firstNotNullOfOrNull { found ->
@@ -411,6 +424,53 @@ fun StratumApp(
                             spriteRevision++
                             it.packed()
                         }
+                    },
+                    savedCharacters = {
+                        // Built from what the stores already hold rather than
+                        // from a list of its own: a separate index would be a
+                        // second source of truth that drifts the first time a
+                        // set is deleted from anywhere else.
+                        ai.poses.sets().map { setId ->
+                            SavedCharacter(
+                                setId = setId,
+                                name = SavedCharacter.nameOf(setId),
+                                posesDrawn = ai.poses.keysIn(setId).size,
+                                hasReference = ai.poses.hasReference(setId),
+                                sheetId = ai.sprites.all()
+                                    .firstOrNull { it.id == setId }?.id,
+                            )
+                        }
+                    },
+                    deleteCharacter = { setId ->
+                        ai.poses.deleteSet(setId)
+                        ai.sprites.delete(setId)
+                        ai.poseGuides.save(setId, PoseGuides())
+                        spriteRevision++
+                    },
+                    exportSheet = { sheetId, name ->
+                        val bytes = ai.sprites.bytesFor(sheetId)
+                        val file = bytes?.let {
+                            SpriteExporter.exportBytes(
+                                context = context,
+                                bytes = it,
+                                fileName = "${SpriteExporter.slug(name)}_sheet.png",
+                                mimeType = "image/png",
+                            )
+                        }
+                        file?.let {
+                            SpriteExporter.share(context, it, "image/png", name)
+                        }
+                        file != null
+                    },
+                    exportPoses = { setId, name ->
+                        val poses = ai.poses.keysIn(setId)
+                            .mapNotNull { key -> ai.poses.pose(setId, key)?.let { key to it } }
+                            .toMap()
+                        val file = SpriteExporter.exportPoses(context, name, poses)
+                        file?.let {
+                            SpriteExporter.share(context, it, "application/zip", name)
+                        }
+                        file != null
                     },
                     isProviderConfigured = ai::isConfigured,
                 ),
