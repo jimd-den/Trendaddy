@@ -785,6 +785,32 @@ private fun HomeScreen(
 
             // The class is chosen before the run, not after: it decides the
             // spawn, the starting weapon and the skill bar.
+            // The character itself, first and unconditionally.
+            //
+            // This used to live inside the hero-class block, which is why it
+            // never appeared: it rendered only when a class in the list
+            // matched the selected id, so art a person had drawn was hidden
+            // behind a lookup that had nothing to do with it. What you look
+            // like is not a property of what you are playing.
+            val drawn = remember(selectedSheetId, selectedClassId, idleFrameFor) {
+                idleFrameFor(selectedClassId.orEmpty())
+            }
+            if (drawn != null) {
+                IdlePortrait(drawn, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(Space.medium))
+            } else if (characterSheets.isEmpty()) {
+                // Said rather than left blank. An empty space where a
+                // character should be reads as the feature being broken;
+                // naming the reason turns it into the next thing to do.
+                Text(
+                    text = "No character art yet — you will be drawn as a shape. " +
+                        "Make one in the pose forge and it appears here.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.inkMuted,
+                )
+                Spacer(Modifier.height(Space.medium))
+            }
+
             // The look, before the class. Two separate choices: what you are
             // playing and what you look like. They used to be one, so the only
             // way to wear a character you had drawn was to go and bind it to a
@@ -828,28 +854,6 @@ private fun HomeScreen(
                     }
                 }
                 heroClasses.firstOrNull { it.id == selectedClassId }?.let { hero ->
-                    // The character, standing, at the size the picker can
-                    // afford. A name in a list says which class; it does not
-                    // say which of the four characters you drew this is, and
-                    // that is the thing a person actually chooses by.
-                    val drawn = remember(hero.id, selectedClassId, selectedSheetId, idleFrameFor) {
-                        idleFrameFor(hero.id)
-                    }
-                    Spacer(Modifier.height(Space.medium))
-                    if (drawn != null) {
-                        IdlePortrait(drawn, modifier = Modifier.fillMaxWidth())
-                    } else {
-                        // Said rather than left blank. An empty space where a
-                        // character should be reads as the feature being
-                        // broken; naming the reason turns it into the next
-                        // thing to do.
-                        Text(
-                            text = "No art yet — this class will be drawn as a shape. " +
-                                "Make a character in the pose forge to see it here.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colors.inkMuted,
-                        )
-                    }
                     Spacer(Modifier.height(Space.small))
                     Text(
                         text = "${hero.resolvedStats.maxHealth} hp · " +

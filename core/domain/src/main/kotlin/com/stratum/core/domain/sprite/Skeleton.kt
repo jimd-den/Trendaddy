@@ -22,6 +22,18 @@ enum class Joint {
     SHOULDER_FAR, ELBOW_FAR, HAND_FAR,
     HIP_NEAR, KNEE_NEAR, FOOT_NEAR,
     HIP_FAR, KNEE_FAR, FOOT_FAR,
+
+    /**
+     * Heel and toe, which are what a foot is as far as a guide is concerned.
+     *
+     * FOOT_NEAR is an ankle: it says where the leg stops and nothing about
+     * which way the foot points or how much of it is on the floor. Those are
+     * the two things that make a walk read as walking rather than as a figure
+     * being slid along, and they are exactly what a whole-body estimator like
+     * DWPose reports and a body-only one does not.
+     */
+    HEEL_NEAR, TOE_NEAR,
+    HEEL_FAR, TOE_FAR,
     ;
 
     companion object {
@@ -59,9 +71,17 @@ data class Pose(val joints: Map<Joint, JointPoint>) {
     fun require(joint: Joint): JointPoint =
         joints[joint] ?: error("Pose is missing $joint")
 
-    /** The lowest drawn point, which is what stands on the ground. */
+    /**
+     * The lowest drawn point, which is what stands on the ground.
+     *
+     * Measured across the feet rather than the ankles. Once a foot has a heel
+     * and a toe, the ankle is no longer the bottom of the figure, and clamping
+     * to it would stand the character on its ankles and push everything below
+     * them through the floor.
+     */
     val groundY: Float
-        get() = maxOf(require(Joint.FOOT_NEAR).y, require(Joint.FOOT_FAR).y)
+        get() = LOWEST.mapNotNull { joints[it]?.y }.maxOrNull()
+            ?: maxOf(require(Joint.FOOT_NEAR).y, require(Joint.FOOT_FAR).y)
 
     /**
      * Where the weapon hand is, and which way the forearm points.
@@ -150,6 +170,9 @@ data class Skeleton(
     val foreArm: Float = 0.14f,
     val thigh: Float = 0.22f,
     val shin: Float = 0.21f,
+    /** Ankle to heel, and ankle to toe. A foot is longer forward than back. */
+    val heel: Float = 0.025f,
+    val toes: Float = 0.055f,
     /**
      * How far the far side of the body is shifted towards the viewer's left.
      *
@@ -185,9 +208,21 @@ data class Skeleton(
         val handFar = elbowFar.along(foreArm, angles.shoulderFar + angles.elbowFar)
 
         val kneeNear = hipNear.along(thigh, angles.hipNear)
-        val footNear = kneeNear.along(shin, angles.hipNear + angles.kneeNear)
+        val shinNear = angles.hipNear + angles.kneeNear
+        val footNear = kneeNear.along(shin, shinNear)
         val kneeFar = hipFar.along(thigh, angles.hipFar)
-        val footFar = kneeFar.along(shin, angles.hipFar + angles.kneeFar)
+        val shinFar = angles.hipFar + angles.kneeFar
+        val footFar = kneeFar.along(shin, shinFar)
+
+        // The foot hangs off the ankle across the shin, not along it. A leg
+        // swung forward puts its heel down first and its toe up, and one
+        // trailing behind does the reverse -- which falls out of taking the
+        // foot as a right angle to the shin, rather than having to be
+        // described pose by pose.
+        val heelNear = footNear.along(heel, shinNear + FOOT_BACK)
+        val toeNear = footNear.along(toes, shinNear + FOOT_FORWARD)
+        val heelFar = footFar.along(heel, shinFar + FOOT_BACK)
+        val toeFar = footFar.along(toes, shinFar + FOOT_FORWARD)
 
         return Pose(
             mapOf(
@@ -202,6 +237,8 @@ data class Skeleton(
                 Joint.HIP_NEAR to hipNear, Joint.KNEE_NEAR to kneeNear,
                 Joint.FOOT_NEAR to footNear,
                 Joint.HIP_FAR to hipFar, Joint.KNEE_FAR to kneeFar, Joint.FOOT_FAR to footFar,
+                Joint.HEEL_NEAR to heelNear, Joint.TOE_NEAR to toeNear,
+                Joint.HEEL_FAR to heelFar, Joint.TOE_FAR to toeFar,
             ),
         ).clampedToGround()
     }
@@ -342,3 +379,22 @@ internal fun directionFromDown(degrees: Float): Pair<Float, Float> {
     val radians = Math.toRadians(degrees.toDouble())
     return sin(radians).toFloat() to cos(radians).toFloat()
 }
+
+/**
+ * Where a foot points relative to the shin above it.
+ *
+ * A right angle either side, so the foot is flat when the shin is vertical and
+ * tips automatically as the leg swings: heel down and toe up on a leg reaching
+ * forward, the reverse on one trailing behind. Getting that for free is the
+ * point -- describing it per pose would be ninety-six more numbers to keep
+ * consistent across seven animations, and they would drift.
+ */
+private const val FOOT_FORWARD = -90f
+private const val FOOT_BACK = 90f
+
+/** Everything that can be the bottom of a figure. */
+private val LOWEST = listOf(
+    Joint.FOOT_NEAR, Joint.FOOT_FAR,
+    Joint.HEEL_NEAR, Joint.HEEL_FAR,
+    Joint.TOE_NEAR, Joint.TOE_FAR,
+)

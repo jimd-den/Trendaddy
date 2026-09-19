@@ -38,6 +38,39 @@ object PoseGuideRenderer {
     ): ByteArray? = when (style) {
         PoseGuideStyle.DIAGRAM -> diagram(pose, size)
         PoseGuideStyle.OPENPOSE -> openPose(pose, size)
+        PoseGuideStyle.DWPOSE -> openPose(pose, size, feet = true)
+    }
+
+    /**
+     * The feet, drawn on top of an OpenPose skeleton.
+     *
+     * This is the whole of what DWPose adds here. Each foot is the ankle, the
+     * heel and the toe joined up, so the guide says which way it points and
+     * how much of it is on the floor -- and it is drawn in the leg's own
+     * colour, so it reads as part of that leg rather than as a separate limb
+     * a model might try to account for.
+     */
+    private fun drawFeet(canvas: Canvas, pose: Pose, size: Int) {
+        val paint = Paint().apply {
+            isAntiAlias = true
+            strokeCap = Paint.Cap.ROUND
+            style = Paint.Style.STROKE
+            strokeWidth = size * OPENPOSE_LIMB * FOOT_WEIGHT
+        }
+        val feet = listOf(
+            Triple(Joint.FOOT_NEAR, Joint.HEEL_NEAR, Joint.TOE_NEAR) to NEAR_FOOT,
+            Triple(Joint.FOOT_FAR, Joint.HEEL_FAR, Joint.TOE_FAR) to FAR_FOOT,
+        )
+        feet.forEach { (joints, color) ->
+            val (ankle, heel, toe) = joints
+            val a = pose.joints[ankle] ?: return@forEach
+            val h = pose.joints[heel] ?: return@forEach
+            val t = pose.joints[toe] ?: return@forEach
+            paint.color = color
+            canvas.drawLine(h.x * size, h.y * size, a.x * size, a.y * size, paint)
+            canvas.drawLine(a.x * size, a.y * size, t.x * size, t.y * size, paint)
+            canvas.drawLine(h.x * size, h.y * size, t.x * size, t.y * size, paint)
+        }
     }
 
     /**
@@ -50,7 +83,7 @@ object PoseGuideRenderer {
      * authored here drops into that ecosystem unchanged, which is the half of
      * interoperability people forget to build.
      */
-    private fun openPose(pose: Pose, size: Int): ByteArray? {
+    private fun openPose(pose: Pose, size: Int, feet: Boolean = false): ByteArray? {
         if (size <= 0) return null
         val bitmap = runCatching {
             Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
@@ -84,6 +117,9 @@ object PoseGuideRenderer {
             jointPaint.color = OpenPoseStyle.colorFor(joint)
             canvas.drawCircle(point.x * size, point.y * size, size * OPENPOSE_JOINT, jointPaint)
         }
+
+        // After the body, so a foot is never hidden under an ankle marker.
+        if (feet) drawFeet(canvas, pose, size)
 
         val out = ByteArrayOutputStream()
         val ok = bitmap.compress(Bitmap.CompressFormat.PNG, PNG_QUALITY, out)
@@ -159,4 +195,17 @@ object PoseGuideRenderer {
     private const val HEAD_RADIUS = 0.052f
     private const val HAND_RADIUS = 0.022f
     private const val PNG_QUALITY = 100
+
+    /**
+     * Feet are drawn a little thinner than limbs.
+     *
+     * They are short, and at limb weight a foot becomes a blob the same size
+     * as the ankle it hangs off -- which says less about direction than no
+     * foot at all would.
+     */
+    private const val FOOT_WEIGHT = 0.7f
+
+    /** The legs' own colours in the OpenPose palette, so a foot joins its leg. */
+    private const val NEAR_FOOT = 0xFF00FF00.toInt()
+    private const val FAR_FOOT = 0xFF0000FF.toInt()
 }
