@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import com.stratum.core.domain.sprite.AnimationClip
 import com.stratum.core.domain.sprite.AnimationState
+import com.stratum.core.domain.sprite.SpriteFacing
 import com.stratum.core.domain.sprite.SpriteOrigin
 import com.stratum.core.domain.sprite.SpriteSheet
 import kotlinx.serialization.Serializable
@@ -164,6 +165,18 @@ private data class SheetDto(
     // Defaulted, so every sheet written before hand-mapped atlases existed
     // keeps reading as the mirrored sheet it was.
     val mirrorsFacings: Boolean = true,
+    /**
+     * Which row block each facing reads from, by facing name.
+     *
+     * Written because it was not. A sheet with a second block of rows for the
+     * away angle carries the whole of that art in the image and nothing in
+     * the file to say how to reach it, so the character turned around until
+     * the app was restarted and then never again -- the rows were still
+     * there, unreferenced, and nothing reported a problem.
+     *
+     * Empty by default, which is every sheet that has only one angle.
+     */
+    val facingRows: Map<String, Int> = emptyMap(),
 )
 
 @Serializable
@@ -186,6 +199,7 @@ private fun SpriteSheet.toDto() = SheetDto(
     frameHeight = frameHeight,
     origin = origin.name,
     mirrorsFacings = mirrorsFacings,
+    facingRows = facingRows.mapKeys { (facing, _) -> facing.name },
     clips = clips.map {
         ClipDto(
             state = it.state.name,
@@ -207,6 +221,12 @@ private fun SheetDto.toDomain() = SpriteSheet(
     frameHeight = frameHeight,
     origin = runCatching { SpriteOrigin.valueOf(origin) }.getOrDefault(SpriteOrigin.IMPORTED),
     mirrorsFacings = mirrorsFacings,
+    // An unreadable facing name is dropped rather than failing the sheet: the
+    // worst case is a character that stops turning, where refusing the whole
+    // file would be a character that cannot be drawn at all.
+    facingRows = facingRows.mapNotNull { (name, row) ->
+        runCatching { SpriteFacing.valueOf(name) }.getOrNull()?.let { it to row }
+    }.toMap(),
     clips = clips.mapNotNull { dto ->
         val state = runCatching { AnimationState.valueOf(dto.state) }.getOrNull()
             ?: return@mapNotNull null

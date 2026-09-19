@@ -21,17 +21,29 @@ class PoseLibrary(context: Context) {
 
     private val root: File = File(context.applicationContext.filesDir, DIRECTORY).apply { mkdirs() }
 
-    private fun setDir(setId: String): File =
-        File(root, setId.replace(NON_FILE_SAFE, "_")).apply { mkdirs() }
+    /**
+     * Where a set lives. Does not create it.
+     *
+     * It used to create it, which made *reading* a set bring it into
+     * existence. The forge asks whether a set has a reference on every
+     * keystroke of the subject line, so typing "Bronze Warrior" left behind a
+     * folder for "B", "Br", "Bro" and every other prefix -- each of which then
+     * appeared in the saved list as a character with no poses. Twelve entries
+     * to delete by hand after naming one character.
+     */
+    private fun setDir(setId: String): File = File(root, setId.replace(NON_FILE_SAFE, "_"))
+
+    /** The same folder, made ready to be written into. Only writers call this. */
+    private fun writableDir(setId: String): File = setDir(setId).apply { mkdirs() }
 
     fun saveReference(setId: String, bytes: ByteArray) {
-        File(setDir(setId), REFERENCE).writeBytes(bytes)
+        File(writableDir(setId), REFERENCE).writeBytes(bytes)
     }
 
     fun reference(setId: String): ByteArray? = read(File(setDir(setId), REFERENCE))
 
     fun savePose(setId: String, key: String, bytes: ByteArray) {
-        File(setDir(setId), "${key.replace(NON_FILE_SAFE, "_")}$SUFFIX").writeBytes(bytes)
+        File(writableDir(setId), "${key.replace(NON_FILE_SAFE, "_")}$SUFFIX").writeBytes(bytes)
     }
 
     fun pose(setId: String, key: String): ByteArray? =
@@ -47,12 +59,28 @@ class PoseLibrary(context: Context) {
 
     fun hasReference(setId: String): Boolean = File(setDir(setId), REFERENCE).isFile
 
-    /** Sets on disk, most recently worked on first. */
+    /**
+     * Sets on disk that have something in them, most recently worked on first.
+     *
+     * Empty folders are skipped rather than listed. New ones are no longer
+     * created by reading, but devices already carry the ones that were, and a
+     * character with nothing in it is not a character.
+     */
     fun sets(): List<String> =
         root.listFiles { file -> file.isDirectory }
             .orEmpty()
+            .filter { dir -> dir.listFiles().orEmpty().isNotEmpty() }
             .sortedByDescending { it.lastModified() }
             .map { it.name }
+
+    /** Removes folders that reading brought into existence and nothing filled. */
+    fun forgetEmptySets(): Int {
+        val empty = root.listFiles { file -> file.isDirectory }
+            .orEmpty()
+            .filter { dir -> dir.listFiles().orEmpty().isEmpty() }
+        empty.forEach { it.delete() }
+        return empty.size
+    }
 
     fun deleteSet(setId: String) {
         setDir(setId).deleteRecursively()

@@ -11,7 +11,9 @@ package com.stratum.core.domain.sprite
  * elbows are where their hips should be, so the layout is named rather than
  * guessed wherever possible.
  */
-enum class OpenPoseLayout(val keypointCount: Int, val order: List<OpenPoseJoint>) {
+private const val FACE_AND_HANDS = 110
+
+enum class OpenPoseLayout(val keypointCount: Int, val order: List<OpenPoseJoint?>) {
 
     /** OpenPose's own COCO output: neck included, right side first. */
     BODY_18(
@@ -42,7 +44,57 @@ enum class OpenPoseLayout(val keypointCount: Int, val order: List<OpenPoseJoint>
             OpenPoseJoint.LEFT_ANKLE, OpenPoseJoint.RIGHT_ANKLE,
         ),
     ),
+
+    /**
+     * DWPose and anything else emitting COCO-WholeBody.
+     *
+     * The same seventeen body keypoints as [BODY_17] and then six for the
+     * feet, which is the reason to prefer it. An ankle says where a leg ends;
+     * a heel and a toe say which way the foot points and how much of it is
+     * down, and that is what a walk is made of. A guide drawn without them
+     * puts the feet wherever the model feels like, and the frames stop being
+     * a cycle and start being a set of standing poses.
+     *
+     * The remaining hundred and ten are face and finger joints. They are
+     * carried as empty slots rather than dropped, because the positions of
+     * everything after them depend on their being counted -- reading a
+     * whole-body file as if the feet were followed by the next body joint
+     * puts a knee where an eyebrow is.
+     */
+    DW_WHOLEBODY(
+        133,
+        BODY_17.order +
+            listOf(
+                OpenPoseJoint.LEFT_BIG_TOE,
+                OpenPoseJoint.LEFT_SMALL_TOE,
+                OpenPoseJoint.LEFT_HEEL,
+                OpenPoseJoint.RIGHT_BIG_TOE,
+                OpenPoseJoint.RIGHT_SMALL_TOE,
+                OpenPoseJoint.RIGHT_HEEL,
+            ) +
+            List(FACE_AND_HANDS) { null },
+    ),
+
+    /**
+     * The body and feet of a whole-body file, with the face and hands cut.
+     *
+     * What a person gets when they export only the parts a character guide
+     * uses, which several tools offer and which is a great deal smaller.
+     */
+    DW_BODY_FOOT(
+        23,
+        DW_WHOLEBODY.order.take(23),
+    ),
     ;
+
+    /**
+     * The joints this layout actually names, with the empty slots removed.
+     *
+     * For everything but a whole-body layout this is the order itself. It
+     * exists so callers that want "the joints" do not have to carry the gaps
+     * that only exist to keep a whole-body file's later positions counted.
+     */
+    val joints: List<OpenPoseJoint> get() = order.filterNotNull()
 
     companion object {
         /** The layout a file of this many keypoints must be, when it is one we know. */
@@ -61,6 +113,18 @@ enum class OpenPoseJoint {
     LEFT_HIP, RIGHT_HIP,
     LEFT_KNEE, RIGHT_KNEE,
     LEFT_ANKLE, RIGHT_ANKLE,
+
+    /**
+     * Feet, which only whole-body estimators report.
+     *
+     * An ankle says where the leg ends and nothing about which way the foot is
+     * pointing or how much of it is down. That is the difference between a
+     * guide that says "stand here" and one that says "stand here, weight on
+     * this heel, that toe still trailing" -- and it is the part of a walk the
+     * eye reads as contact with the ground.
+     */
+    LEFT_BIG_TOE, LEFT_SMALL_TOE, LEFT_HEEL,
+    RIGHT_BIG_TOE, RIGHT_SMALL_TOE, RIGHT_HEEL,
 }
 
 /** One keypoint as OpenPose reports it: a position and how sure it is. */
@@ -175,6 +239,11 @@ object OpenPoseImport {
 
         val keypoints = HashMap<OpenPoseJoint, OpenPoseKeypoint>()
         resolved.order.forEachIndexed { index, joint ->
+            // Null slots are keypoints the layout carries and this model does
+            // not: a whole-body file is mostly face and finger joints, which a
+            // stick guide for a game character has no use for and which would
+            // only crowd the drawing.
+            if (joint == null) return@forEachIndexed
             val at = index * 3
             keypoints[joint] = OpenPoseKeypoint(
                 x = values[at] / imageWidth,
@@ -440,7 +509,7 @@ object OpenPoseExport {
         imageWidth: Float = 1f,
         imageHeight: Float = 1f,
     ): List<Float> = layout.order.flatMap { joint ->
-        val point = body[joint]
+        val point = joint?.let { body[it] }
         if (point == null) {
             // OpenPose's own marker for "not found", and the reason
             // OpenPoseKeypoint carries a confidence at all.

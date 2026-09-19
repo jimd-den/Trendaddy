@@ -42,9 +42,14 @@ class PoseGuideStore(context: Context) {
         // discarded "imported mode, chosen, nothing picked yet" and "words
         // only" alike -- a choice that survives until you leave the screen is
         // worse than one that never appeared.
-        val isDefault = guides.imported.isEmpty() &&
-            guides.mode == PoseGuideMode.BUILT_IN &&
-            guides.style == PoseGuideStyle.DIAGRAM
+        //
+        // Compared against the default object rather than against a copy of
+        // its fields. The copy went stale the moment the default style
+        // changed, and the failure was silent and backwards: picking the style
+        // that used to be the default looked like picking nothing, so it was
+        // dropped and came back as the new default. Asking the type what its
+        // default is cannot drift from the type.
+        val isDefault = guides == PoseGuides(skeleton = guides.skeleton)
         if (isDefault) all.remove(setId) else all[setId] = guides.toDto()
         runCatching { file.writeText(json.encodeToString(all)) }
     }

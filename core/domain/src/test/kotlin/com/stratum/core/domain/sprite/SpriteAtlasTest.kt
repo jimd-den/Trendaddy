@@ -328,6 +328,89 @@ class SpriteSlicingTest {
     }
 }
 
+class GroundAnchorTest {
+
+    private val width = 64
+    private val height = 64
+
+    /** A figure standing at [footX] with an arm reaching out to [reachX]. */
+    private fun figure(footX: Int, reachX: Int): IntArray {
+        val pixels = IntArray(width * height)
+        fun set(x: Int, y: Int) {
+            if (x in 0 until width && y in 0 until height) pixels[y * width + x] = OPAQUE
+        }
+        // Legs and feet: a narrow column standing on the floor.
+        for (y in 40 until 60) for (x in footX - 2..footX + 2) set(x, y)
+        // Torso.
+        for (y in 24 until 40) for (x in footX - 4..footX + 4) set(x, y)
+        // One arm, reaching a long way to one side at shoulder height.
+        val from = minOf(footX, reachX)
+        val to = maxOf(footX, reachX)
+        for (y in 26 until 30) for (x in from..to) set(x, y)
+        return pixels
+    }
+
+    private fun anchorOf(pixels: IntArray): Int? = SpriteSlicing.groundAnchorX(
+        pixels, width, height, SourceRect(0, 0, width, height),
+    )
+
+    @Test
+    fun `the anchor follows the feet, not the reach`() {
+        // The defect this exists for. An animation is a body moving its limbs
+        // while its feet stay where they are, so hanging a frame from the
+        // middle of its content box slides the whole body whenever an arm
+        // comes out. Measured on a real walk cycle that put the feet
+        // sixty-two pixels apart across a hundred and ninety-one pixel cell.
+        val standing = figure(footX = 20, reachX = 20)
+        val reaching = figure(footX = 20, reachX = 52)
+
+        val still = assertNotNull(anchorOf(standing))
+        val moved = assertNotNull(anchorOf(reaching))
+        assertTrue(
+            kotlin.math.abs(moved - still) <= 1,
+            "the anchor moved from $still to $moved because an arm came out",
+        )
+
+        // And the content box's centre really does move, which is what made
+        // this worth fixing rather than a theoretical concern.
+        val box = assertNotNull(
+            SpriteSlicing.contentBounds(reaching, width, height, SourceRect(0, 0, width, height)),
+        )
+        val boxCentre = box.left + box.width / 2
+        assertTrue(
+            kotlin.math.abs(boxCentre - still) > 8,
+            "the content box centre did not move, so there was nothing to fix",
+        )
+    }
+
+    @Test
+    fun `a stance with one foot forward is weighted by what is down`() {
+        // Centroid rather than midpoint: a figure mid-stride has more of one
+        // foot on the ground than the other, and the anchor should sit where
+        // the weight is rather than halfway between the toes.
+        val pixels = IntArray(width * height)
+        fun set(x: Int, y: Int) { pixels[y * width + x] = OPAQUE }
+        // A wide back foot and a narrow front foot.
+        for (y in 56 until 60) for (x in 14..22) set(x, y)
+        for (y in 56 until 60) for (x in 38..40) set(x, y)
+        for (y in 30 until 56) for (x in 24..30) set(x, y)
+
+        val anchor = assertNotNull(anchorOf(pixels))
+        val midpoint = (14 + 40) / 2
+        assertTrue(anchor < midpoint, "the anchor ignored which foot carried the weight")
+        assertTrue(anchor in 14..30, "the anchor left the feet entirely: $anchor")
+    }
+
+    @Test
+    fun `nothing drawn has no anchor`() {
+        assertNull(anchorOf(IntArray(width * height)))
+    }
+
+    private companion object {
+        const val OPAQUE = 0xFF4488CC.toInt()
+    }
+}
+
 class SpriteValidationTest {
 
     private fun mapped(role: ActorRole, vararg states: AnimationState): SpriteAtlas {

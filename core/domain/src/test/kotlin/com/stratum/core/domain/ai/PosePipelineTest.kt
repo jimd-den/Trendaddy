@@ -2,6 +2,8 @@ package com.stratum.core.domain.ai
 
 import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.sprite.AtlasBaker
+import com.stratum.core.domain.sprite.MocapPoses
+import com.stratum.core.domain.sprite.SpriteFacing
 import com.stratum.core.domain.sprite.PoseCell
 import com.stratum.core.domain.sprite.PoseSheetPlanner
 import kotlinx.coroutines.test.runTest
@@ -40,11 +42,82 @@ class PoseScriptTest {
     }
 
     @Test
-    fun `a walk is four poses and a hurt is two`() {
+    fun `a full script is six frames of every state, which is a 6x7 sheet`() {
         val script = PoseScript.full()
-        assertEquals(4, script.stepsFor(AnimationState.WALK).size)
-        assertEquals(2, script.stepsFor(AnimationState.HURT).size)
+        AnimationState.entries.forEach { state ->
+            assertEquals(6, script.stepsFor(state).size, "$state is not six frames")
+        }
+        assertEquals(42, script.steps.size)
         assertEquals(script.steps.size, script.frameCounts().values.sum())
+
+        // Six across and seven down, which is the shape the sheet comes out.
+        assertEquals(6, script.frameCounts().values.max())
+        assertEquals(7, script.frameCounts().size)
+    }
+
+    @Test
+    fun `an animation can be asked for more frames, and they are all different`() {
+        AnimationState.entries.forEach { state ->
+            PoseScript.FRAME_CHOICES.forEach { count ->
+                val poses = PoseScript.posesFor(state, count)
+                assertEquals(count, poses.size, "$state at $count frames")
+                // The whole point of asking for more: paying twice for the
+                // same instruction would buy a duplicate frame, not a
+                // smoother animation.
+                assertEquals(
+                    count,
+                    poses.toSet().size,
+                    "$state at $count frames repeated an instruction",
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `raising the frame count adds work instead of invalidating it`() {
+        // Frames already drawn are keyed by state and index. If a longer
+        // script renumbered them, every frame already paid for would be
+        // silently wrong, and nothing would say so.
+        val four = PoseScript.posesFor(AnimationState.WALK, 4)
+        val twelve = PoseScript.posesFor(AnimationState.WALK, 12)
+        assertEquals(four.first(), twelve.first())
+        assertTrue(four.all { it in twelve }, "a shorter walk is not a subset of a longer one")
+    }
+
+    @Test
+    fun `each animation is counted on its own`() {
+        val script = PoseScript.full(
+            mapOf(AnimationState.IDLE to 12, AnimationState.DIE to 3),
+        )
+        assertEquals(12, script.stepsFor(AnimationState.IDLE).size)
+        assertEquals(3, script.stepsFor(AnimationState.DIE).size)
+        // Everything unnamed keeps the default rather than following the last
+        // thing that was set.
+        assertEquals(
+            PoseScript.DEFAULT_FRAMES,
+            script.stepsFor(AnimationState.WALK).size,
+        )
+    }
+
+    @Test
+    fun `every step of every frame count has a skeleton to pose from`() {
+        // The guides are authored at one length and the script can now be
+        // asked for another, so the two have to meet for any count rather
+        // than only at the one they were written at.
+        AnimationState.entries.forEach { state ->
+            PoseScript.FRAME_CHOICES.forEach { count ->
+                val posed = (0 until count).map { index ->
+                    MocapPoses.poseFor(state, index, count)
+                }
+                assertEquals(count, posed.size)
+                if (count > 1) {
+                    assertTrue(
+                        posed.toSet().size > 1,
+                        "$state at $count frames posed every frame identically",
+                    )
+                }
+            }
+        }
     }
 
     @Test
@@ -225,6 +298,244 @@ class PoseSheetPlannerTest {
     }
 
     @Test
+    fun `an away view is a second block of rows the facing reaches`() {
+        val plan = assertNotNull(
+            PoseSheetPlanner.plan(
+                id = "t",
+                name = "T",
+                frameCounts = mapOf(AnimationState.IDLE to 6, AnimationState.WALK to 6),
+                views = listOf(
+                    "" to listOf(SpriteFacing.SOUTH_EAST, SpriteFacing.SOUTH_WEST),
+                    "_away" to listOf(SpriteFacing.NORTH_EAST, SpriteFacing.NORTH_WEST),
+                ),
+            ),
+        )
+
+        // Two states, two angles: four rows, not two and not eight.
+        assertEquals(4, plan.rows)
+        assertEquals(6, plan.columns)
+
+        // Every pose of both angles has a cell, and they are different cells.
+        val front = assertNotNull(plan.cellFor("walk_2"))
+        val away = assertNotNull(plan.cellFor("walk_2_away"))
+        assertEquals(front.column, away.column)
+        assertEquals(front.row + 2, away.row, "the away block did not start after the front one")
+
+        // The clip is written once, against the first block. This is the part
+        // that would break silently: a second set of clips would be the same
+        // animation named twice, and the sheet has one clip per state.
+        assertEquals(2, plan.sheet.clips.size)
+
+        // And the facing is what carries a frame into the right block.
+        val walk = assertNotNull(plan.sheet.clip(AnimationState.WALK))
+        val frame = walk.firstFrame + 2
+        assertEquals(frame, plan.sheet.frameFor(frame, SpriteFacing.SOUTH_EAST))
+        assertEquals(
+            frame + 2 * plan.columns,
+            plan.sheet.frameFor(frame, SpriteFacing.NORTH_EAST),
+            "walking away drew the frame facing the viewer",
+        )
+        // The mirror still covers the other side of each pair, which is why
+        // two drawn angles serve four.
+        assertEquals(
+            plan.sheet.frameFor(frame, SpriteFacing.NORTH_EAST),
+            plan.sheet.frameFor(frame, SpriteFacing.NORTH_WEST),
+        )
+        assertTrue(SpriteFacing.NORTH_WEST.mirrored)
+    }
+
+    @Test
+    fun `a front-only sheet is exactly what it was before views existed`() {
+        // The default has to stay byte-for-byte what every character already
+        // on disk was planned as, or opening one re-cuts it.
+        val plan = assertNotNull(
+            PoseSheetPlanner.plan("t", "T", mapOf(AnimationState.IDLE to 6)),
+        )
+        assertEquals(1, plan.rows)
+        assertEquals("idle_0", plan.cells.first().key)
+        assertEquals(0, plan.sheet.frameFor(0, SpriteFacing.NORTH_WEST))
+    }
+
+    @Test
+    fun `a script draws every front frame before any away frame`() {
+        // A run that stops halfway should leave one complete angle rather than
+        // half of each: a character with no back is playable, a character with
+        // half a walk is not.
+        val script = PoseScript.full(views = listOf(PoseView.FRONT, PoseView.AWAY))
+        assertEquals(84, script.steps.size)
+        val firstAway = script.steps.indexOfFirst { it.view == PoseView.AWAY }
+        assertEquals(42, firstAway)
+        assertTrue(script.steps.take(42).all { it.view == PoseView.FRONT })
+
+        // The sheet is still six frames wide: both angles hold the same
+        // animation at the same length, and counting across them would plan a
+        // sheet twice as wide as the walk it is laying out.
+        assertEquals(6, script.frameCounts().values.max())
+    }
+
+    @Test
+    fun `an away pose is filed under its own key`() {
+        // Sharing a key with the front would overwrite it on disk, and the
+        // symptom would be a character whose front is its back.
+        val front = PoseScript.full().steps.first { it.state == AnimationState.IDLE }
+        val away = PoseScript.full(views = listOf(PoseView.AWAY))
+            .steps.first { it.state == AnimationState.IDLE }
+        assertEquals("idle_0", front.key)
+        assertEquals("idle_0_away", away.key)
+
+        // And the away prompt says the face is not visible, which is the whole
+        // difference between a back view and the same drawing again.
+        assertTrue(away.view.turnClause.contains("not visible"))
+        assertTrue(front.view.turnClause.isBlank())
+    }
+
+    @Test
+    fun `a twelve frame character with an away view plans no empty cells`() {
+        // The reported failure, exactly: twelve frames a state with away
+        // views, every pose drawn, and the sheet came back saying a hundred
+        // and sixty-eight poses could not be read. Counting frames across
+        // both views doubled the column count, so every row was planned twice
+        // as wide as the animation in it and the second half of each row
+        // named poses that were never asked for.
+        val frames = AnimationState.entries.associateWith { 12 }
+        val script = PoseScript.full(frames, views = listOf(PoseView.FRONT, PoseView.AWAY))
+        val drawn = script.steps.map { it.key }.toSet()
+        assertEquals(168, drawn.size, "the run itself is 12 x 7 x 2")
+
+        val counts = script.drawnCounts(drawn)
+        assertTrue(
+            counts.values.all { it == 12 },
+            "a state was counted as ${counts.values.distinct()} frames, not 12",
+        )
+
+        val plan = assertNotNull(
+            PoseSheetPlanner.plan(
+                id = "t",
+                name = "T",
+                frameCounts = counts,
+                views = script.drawnViews(drawn).map { it.keySuffix to it.serves },
+            ),
+        )
+        assertEquals(12, plan.columns)
+        assertEquals(14, plan.rows, "seven states, two views")
+
+        // The real assertion: every cell the sheet plans has a pose behind it.
+        val orphans = plan.cells.filterNot { it.key in drawn }
+        assertTrue(orphans.isEmpty(), "${orphans.size} cells had no pose: ${orphans.take(4)}")
+        assertEquals(drawn.size, plan.cells.size)
+    }
+
+    @Test
+    fun `a half-drawn away block does not narrow the animation`() {
+        // An away view one frame short should report that one frame missing,
+        // not quietly cut a column off every animation in the sheet.
+        val frames = mapOf(AnimationState.IDLE to 6)
+        val script = PoseScript.of(
+            listOf(AnimationState.IDLE),
+            frames,
+            views = listOf(PoseView.FRONT, PoseView.AWAY),
+        )
+        val drawn = script.steps.map { it.key }.toSet() - "idle_5_away"
+
+        assertEquals(6, script.drawnCounts(drawn)[AnimationState.IDLE])
+        val plan = assertNotNull(
+            PoseSheetPlanner.plan(
+                id = "t",
+                name = "T",
+                frameCounts = script.drawnCounts(drawn),
+                views = script.drawnViews(drawn).map { it.keySuffix to it.serves },
+            ),
+        )
+        assertEquals(6, plan.columns)
+        assertEquals(listOf("idle_5_away"), plan.cells.map { it.key }.filterNot { it in drawn })
+    }
+
+    @Test
+    fun `a front-only run plans a front-only sheet`() {
+        val script = PoseScript.full(views = listOf(PoseView.FRONT, PoseView.AWAY))
+        // Only the front was drawn before the run was stopped.
+        val drawn = script.stepsFor(PoseView.FRONT).map { it.key }.toSet()
+
+        assertEquals(listOf(PoseView.FRONT), script.drawnViews(drawn))
+        val plan = assertNotNull(
+            PoseSheetPlanner.plan(
+                id = "t",
+                name = "T",
+                frameCounts = script.drawnCounts(drawn),
+                views = script.drawnViews(drawn).map { it.keySuffix to it.serves },
+            ),
+        )
+        // Seven rows, not fourteen: planning the away block would leave half
+        // the sheet empty and the character would walk north as a hole.
+        assertEquals(7, plan.rows)
+        assertTrue(plan.cells.all { it.key in drawn })
+    }
+
+    @Test
+    fun `away art on disk reaches the sheet even when nobody asked for it`() {
+        // The failure: the script is built from a toggle, the toggle is UI
+        // state that defaults to off and was not restored when a character was
+        // reopened -- so a set generated with away frames packed as front-only
+        // and the away art, already paid for, was quietly left out.
+        //
+        // Counting against every angle a character *could* have is what makes
+        // the sheet follow the disk instead of following a checkbox.
+        val full = PoseScript.full(views = PoseView.entries)
+        val drawn = full.steps.map { it.key }.toSet()
+
+        // The front-only script -- what the toggle would have produced -- can
+        // see none of the away work.
+        val frontOnly = PoseScript.full(views = listOf(PoseView.FRONT))
+        assertEquals(listOf(PoseView.FRONT), frontOnly.drawnViews(drawn))
+        assertEquals(listOf(PoseView.FRONT, PoseView.AWAY), full.drawnViews(drawn))
+
+        val plan = assertNotNull(
+            PoseSheetPlanner.plan(
+                id = "t",
+                name = "T",
+                frameCounts = full.drawnCounts(drawn),
+                views = full.drawnViews(drawn).map { it.keySuffix to it.serves },
+            ),
+        )
+        assertEquals(14, plan.rows, "the away block was left out of the sheet")
+        assertTrue(plan.cells.any { it.key.endsWith("_away") })
+    }
+
+    @Test
+    fun `every facing reaches art, and the two drawn angles differ`() {
+        // The end of the chain: a sheet is only useful if asking it for a
+        // direction lands on the right half of it. All four world facings have
+        // to resolve, the two that share a drawn angle have to agree, and the
+        // front and away pairs have to disagree -- otherwise the back art is
+        // on the sheet and nothing ever reads it.
+        val full = PoseScript.full(views = PoseView.entries)
+        val drawn = full.steps.map { it.key }.toSet()
+        val sheet = assertNotNull(
+            PoseSheetPlanner.plan(
+                id = "t",
+                name = "T",
+                frameCounts = full.drawnCounts(drawn),
+                views = full.drawnViews(drawn).map { it.keySuffix to it.serves },
+            ),
+        ).sheet
+
+        val walk = assertNotNull(sheet.clip(AnimationState.WALK))
+        val frame = walk.firstFrame + 1
+        val south = sheet.frameFor(frame, SpriteFacing.SOUTH_EAST)
+        val southWest = sheet.frameFor(frame, SpriteFacing.SOUTH_WEST)
+        val north = sheet.frameFor(frame, SpriteFacing.NORTH_EAST)
+        val northWest = sheet.frameFor(frame, SpriteFacing.NORTH_WEST)
+
+        assertEquals(south, southWest, "the two front facings read different art")
+        assertEquals(north, northWest, "the two away facings read different art")
+        assertTrue(north != south, "walking away read the front art")
+        // And every one of them is a frame the sheet actually has.
+        listOf(south, southWest, north, northWest).forEach {
+            assertTrue(it in 0 until sheet.columns * sheet.rows, "frame $it is off the sheet")
+        }
+    }
+
+    @Test
     fun `nothing to draw is no plan`() {
         assertNull(PoseSheetPlanner.plan("t", "T", emptyMap()))
         assertNull(PoseSheetPlanner.plan("t", "T", mapOf(AnimationState.IDLE to 0)))
@@ -386,7 +697,7 @@ class PoseFrameGenerationTest {
             use(PoseFrameRequest(reference = reference, step = step)).getOrThrow()
         }
 
-        assertEquals(4, model.requests.size)
+        assertEquals(6, model.requests.size)
         assertTrue(model.requests.all { it.references == listOf(reference) })
     }
 

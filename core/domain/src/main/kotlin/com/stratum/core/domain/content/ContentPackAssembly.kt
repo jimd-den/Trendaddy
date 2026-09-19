@@ -206,10 +206,18 @@ data class AssembledContent(
     fun sheetForHero(heroClassId: String): SpriteSheet? =
         spriteSheet(heroClasses.firstOrNull { it.id == heroClassId }?.spriteSetId)
 
-    /** A copy with extra sheets layered on, for sheets generated this session. */
+    /**
+     * A copy with extra sheets layered on, for sheets generated this session.
+     *
+     * The extras come first, because `distinctBy` keeps the first of each id
+     * and layering means the new one wins. The other way round, regenerating a
+     * sheet under an id a pack already uses silently kept the pack's version --
+     * so the art changed on disk, the world went on drawing the old one, and
+     * the only way to see the new one was to restart.
+     */
     fun withSpriteSheets(extra: List<SpriteSheet>): AssembledContent =
         if (extra.isEmpty()) this
-        else copy(spriteSheets = (spriteSheets + extra).distinctBy { it.id })
+        else copy(spriteSheets = (extra + spriteSheets).distinctBy { it.id })
 
     fun rarityName(rarity: ItemRarity): String = rarityStyles[rarity]?.name ?: rarity.name.lowercase()
 

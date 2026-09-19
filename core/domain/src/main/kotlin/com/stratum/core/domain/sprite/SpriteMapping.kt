@@ -337,3 +337,46 @@ object SpriteValidation {
         AnimationState.DIE -> "death"
     }
 }
+
+/**
+ * Which actors a sheet's art may stand in for, decided by where it is filed.
+ *
+ * Sheet ids carry a namespace, and three separate places used to test it with
+ * their own copy of a string literal: the class picker, and both halves of the
+ * resolver. A fourth kind of sheet then arrived -- a character generated one
+ * pose at a time -- and was invisible to all of them at once, so a character
+ * somebody had spent forty generations on could not be chosen, could not be
+ * drawn, and gave no hint why.
+ *
+ * The first fix let that fourth kind serve either role, on the reasoning that
+ * a pose sheet is a full character sheet and so could be used for anything.
+ * True of the art and wrong about the game: the player's own character was
+ * then also the art for every monster in the world, so a player met five
+ * copies of themselves in a field and had no way to say otherwise. A
+ * character is drawn for a purpose, and the purpose is the person's to state
+ * -- so it is now chosen in the forge and written into the id, and this only
+ * reads it back.
+ *
+ * [POSE] remains for characters generated before the choice existed. They
+ * serve as heroes, which is what almost all of them were made to be, and
+ * never as monsters -- being wrongly absent from a monster is a character you
+ * can still assign by hand, where being wrongly present is a world full of
+ * one face.
+ */
+object SpriteNamespace {
+
+    const val HERO = "hero:"
+    const val MONSTER = "monster:"
+
+    /** Characters generated before a character could say what it was for. */
+    const val POSE = "pose:"
+
+    fun servesHero(sheetId: String): Boolean =
+        sheetId.startsWith(HERO) || sheetId.startsWith(POSE)
+
+    fun servesMonster(sheetId: String): Boolean = sheetId.startsWith(MONSTER)
+
+    /** Whether this is character art at all, rather than a prop or a weapon. */
+    fun isCharacter(sheetId: String): Boolean =
+        servesHero(sheetId) || servesMonster(sheetId)
+}

@@ -209,6 +209,15 @@ class GeneratePoseFrameUseCase(
         // those read best from. Frames that alternate between angles are not an
         // animation, they are a flicker, so this is the one worth shouting.
         appendLine(IsometricCamera.holdClause)
+        // After the camera clause and in its own paragraph, because the two
+        // are easy to read as contradicting each other: one says the view does
+        // not change, the other says the subject is seen from behind. Stated
+        // as a fact about the body and placed second, it reads as what it is
+        // -- the character has turned, the viewer has not.
+        if (request.step.view.turnClause.isNotBlank()) {
+            appendLine()
+            appendLine(request.step.view.turnClause)
+        }
         appendLine()
         appendLine("Keep identical to the character in IMAGE 1:")
         appendLine("- The same character. Same face, same build, same proportions.")

@@ -39,6 +39,9 @@ class LayeredTerrainGenerator(
     private val biomeNoise = ValueNoise(config.seed * 31 + 7)
     private val caveNoise = ValueNoise(config.seed * 17 + 13)
 
+    /** Where things grow thickly and where they do not. See [TerrainRecipe.scatterClustering]. */
+    private val groveNoise = ValueNoise(config.seed * 53 + 29)
+
     override fun generate(pos: ChunkPos, registry: BlockRegistry): Chunk {
         val chunk = Chunk(pos)
         val bedrockIndex = registry.indexOf(BlockType.BEDROCK.id)
@@ -216,9 +219,20 @@ class LayeredTerrainGenerator(
         val surfaceZ = chunk.surfaceAt(localX, localY)
         if (surfaceZ < 0) return
 
+        // One sample for the whole column, not one per rule: undergrowth and
+        // trees thin out together, which is what makes a clearing read as a
+        // clearing rather than as a gap in one species.
+        val density = recipe.scatterDensity(
+            groveNoise.fractal(
+                worldX * recipe.scatterClusterScale,
+                worldY * recipe.scatterClusterScale,
+                octaves = 2,
+            ),
+        )
+
         biome.scatter.forEachIndexed { ruleIndex, rule ->
             val roll = PositionalRandom.floatAt(config.seed, worldX, worldY, SCATTER_SALT + ruleIndex)
-            if (roll >= rule.chance) return@forEachIndexed
+            if (roll >= rule.chance * density) return@forEachIndexed
             val index = registry.indexOf(rule.blockId)
             val cap = rule.capBlockId?.let(registry::indexOrNull)
             for (offset in 1..rule.height) {

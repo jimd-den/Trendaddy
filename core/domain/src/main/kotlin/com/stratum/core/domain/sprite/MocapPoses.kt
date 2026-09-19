@@ -51,22 +51,54 @@ object MocapPoses {
         if (frames.isEmpty()) return PoseAngles()
         if (frameCount <= 1) return frames.first()
         val t = (index.toFloat() / (frameCount - 1)).coerceIn(0f, 1f)
-        val at = (t * (frames.size - 1)).toInt().coerceIn(0, frames.size - 1)
-        return frames[at]
+        val exact = t * (frames.size - 1)
+        val at = exact.toInt().coerceIn(0, frames.size - 1)
+        val next = (at + 1).coerceAtMost(frames.size - 1)
+        // Blended rather than truncated to the authored frame. Truncating sent
+        // every frame to the earlier pose: six idle frames from two authored
+        // ones came out as five identical stills and one odd last frame, which
+        // is precisely how an idle ends up reading as a twitch.
+        return frames[at].blendedTo(frames[next], exact - at)
     }
 
-    /** Standing, and the same standing a fraction taller on the in-breath. */
+    /**
+     * A breath, and back to where it started.
+     *
+     * Authored as a full cycle rather than as two ends of one. An idle is the
+     * pose a character holds for most of the time anybody looks at it, so it
+     * is the one place where a two-frame approximation is most visible: played
+     * as a loop, rest and in-breath alternating is a shiver, not breathing.
+     * Rising takes longer than falling, the way a real breath does, which is
+     * why the peak sits at frame three of six rather than in the middle.
+     *
+     * The movement is deliberately tiny -- eight thousandths of the body's
+     * height at the top. It is the smallest thing on this list and the one
+     * that decides whether a character looks alive while standing still.
+     */
     private val idle = listOf(
         PoseAngles(),
-        PoseAngles(driftY = -0.008f, lean = 1f, shoulderNear = 9f, shoulderFar = -9f),
+        PoseAngles(driftY = -0.003f, lean = 0.4f, shoulderNear = 8.4f, shoulderFar = -8.4f),
+        PoseAngles(driftY = -0.007f, lean = 0.9f, shoulderNear = 9f, shoulderFar = -9f),
+        PoseAngles(
+            driftY = -0.008f, lean = 1f, shoulderNear = 9.2f, shoulderFar = -9.2f,
+            headTilt = -0.5f,
+        ),
+        PoseAngles(driftY = -0.005f, lean = 0.6f, shoulderNear = 8.6f, shoulderFar = -8.6f),
+        PoseAngles(driftY = -0.001f, lean = 0.2f, shoulderNear = 8.1f, shoulderFar = -8.1f),
     )
 
     /**
-     * Contact, passing, contact, passing.
+     * Contact, passing, reaching — twice, once for each leg.
      *
-     * The oldest four frames in animation. Arms swing opposite the legs, and
-     * the body drops at the contacts and rises through the passes — which is
-     * the part that makes it read as walking rather than as gliding.
+     * The oldest frames in animation, at the length the script now asks for.
+     * Arms swing opposite the legs, and the body drops at the contacts and
+     * rises through the passes, which is the part that makes it read as
+     * walking rather than as gliding.
+     *
+     * The order is the cycle, which matters more here than in any other state:
+     * the last frame hands back to the first, so a reach that sits at the end
+     * of the list instead of between a pass and a contact makes the character
+     * hitch once per stride.
      */
     private val walk = listOf(
         // Contact: front heel down with the leg nearly straight, back leg
@@ -84,6 +116,14 @@ object MocapPoses {
             shoulderNear = -6f, elbowNear = 8f, shoulderFar = 6f, elbowFar = -8f,
             driftY = -0.004f,
         ),
+        // Reaching: the swing leg thrown forward at full extension and the
+        // body at its highest, the moment before the heel lands.
+        PoseAngles(
+            hipNear = -14f, kneeNear = 6f, hipFar = 32f, kneeFar = -14f,
+            shoulderNear = 16f, elbowNear = -10f, shoulderFar = -16f, elbowFar = 10f,
+            driftY = -0.012f,
+        ),
+        // The same three again with the legs and arms swapped.
         PoseAngles(
             hipNear = -22f, kneeNear = 10f, hipFar = 25f, kneeFar = -6f,
             shoulderNear = 24f, elbowNear = -14f, shoulderFar = -24f, elbowFar = 14f,
@@ -94,16 +134,13 @@ object MocapPoses {
             shoulderNear = 6f, elbowNear = -8f, shoulderFar = -6f, elbowFar = 8f,
             driftY = -0.004f,
         ),
+        PoseAngles(
+            hipNear = 32f, kneeNear = -14f, hipFar = -14f, kneeFar = 6f,
+            shoulderNear = -16f, elbowNear = 10f, shoulderFar = 16f, elbowFar = -10f,
+            driftY = -0.012f,
+        ),
     )
 
-    /**
-     * Wind-up, swing, impact, recovery.
-     *
-     * The weapon hand travels from high and behind the near shoulder to low and
-     * across the body. Both arms move together: a one-handed weapon still gets
-     * a counterbalancing far arm, and without it the figure reads as reaching
-     * rather than as striking.
-     */
     private val attack = listOf(
         // Drawn out, the first version of this reached *forward* at head
         // height: the forearm bent back towards the near side, which put the
@@ -129,9 +166,31 @@ object MocapPoses {
             hipNear = 16f, kneeNear = -4f, hipFar = -10f, kneeFar = 16f,
             lean = 6f,
         ),
+        // Settling: weapon low at the side, weight coming back over both feet,
+        // still carrying a little of the swing forward.
+        PoseAngles(
+            shoulderNear = 26f, elbowNear = 14f, shoulderFar = -12f, elbowFar = 16f,
+            hipNear = 8f, kneeNear = -2f, hipFar = -6f, kneeFar = 8f,
+            lean = 3f,
+        ),
+        // Still coming down, never back up. The first version of this frame
+        // raised the weapon into a guard, which is what a fighter really does
+        // -- and which reverses the blade's arc in the last frame of the
+        // swing. On a held weapon that reads as the blade snapping backwards.
+        // Returning to guard belongs to the move out of this clip, not to the
+        // end of it, so the arc runs one way the whole way through.
+        PoseAngles(
+            shoulderNear = 12f, elbowNear = 8f, shoulderFar = -26f, elbowFar = 12f,
+            hipNear = 4f, kneeNear = -2f, hipFar = -4f, kneeFar = 4f,
+            lean = 1f,
+        ),
     )
 
-    /** Gather, rise, release, settle. Symmetrical, so it never reads as a swing. */
+    /**
+     * Gather, rise, release, then three frames of coming back down.
+     *
+     * Symmetrical throughout, so it never reads as a swing.
+     */
     private val special = listOf(
         PoseAngles(
             shoulderNear = 26f, elbowNear = 108f, shoulderFar = -26f, elbowFar = -108f,
@@ -151,9 +210,17 @@ object MocapPoses {
             shoulderNear = 58f, elbowNear = 16f, shoulderFar = -58f, elbowFar = -16f,
             lean = 2f,
         ),
+        PoseAngles(
+            shoulderNear = 30f, elbowNear = 10f, shoulderFar = -30f, elbowFar = -10f,
+            lean = 1f,
+        ),
+        PoseAngles(
+            shoulderNear = 12f, elbowNear = 2f, shoulderFar = -12f, elbowFar = -2f,
+            hipNear = 2f, hipFar = -2f,
+        ),
     )
 
-    /** Snapped back, then doubled over and off balance. */
+    /** Snapped back, doubled over, and six frames of getting upright again. */
     private val hurt = listOf(
         PoseAngles(
             shoulderNear = 122f, elbowNear = -34f, shoulderFar = -122f, elbowFar = 34f,
@@ -165,9 +232,34 @@ object MocapPoses {
             hipNear = -8f, kneeNear = 24f, hipFar = -28f, kneeFar = 34f,
             lean = 20f, headTilt = 14f, driftX = -0.045f,
         ),
+        // The worst of the stagger: bent low over the front knee, arms pulled
+        // in to the body rather than flung out.
+        PoseAngles(
+            shoulderNear = 30f, elbowNear = 86f, shoulderFar = -20f, elbowFar = 64f,
+            hipNear = -4f, kneeNear = 34f, hipFar = -34f, kneeFar = 44f,
+            lean = 32f, headTilt = 22f, driftX = -0.06f, driftY = 0.04f,
+        ),
+        // Catching it: back foot planted, torso starting to come back up.
+        PoseAngles(
+            shoulderNear = 26f, elbowNear = 70f, shoulderFar = -22f, elbowFar = 44f,
+            hipNear = 4f, kneeNear = 22f, hipFar = -26f, kneeFar = 30f,
+            lean = 22f, headTilt = 14f, driftX = -0.05f, driftY = 0.022f,
+        ),
+        PoseAngles(
+            shoulderNear = 18f, elbowNear = 40f, shoulderFar = -18f, elbowFar = 24f,
+            hipNear = 4f, kneeNear = 12f, hipFar = -14f, kneeFar = 16f,
+            lean = 12f, headTilt = 6f, driftX = -0.03f, driftY = 0.008f,
+        ),
+        // Recovered, but not back to the idle: still tensed, which is what
+        // stops a flinch from ending in a shrug.
+        PoseAngles(
+            shoulderNear = 12f, elbowNear = 16f, shoulderFar = -12f, elbowFar = 8f,
+            hipNear = 2f, kneeNear = 4f, hipFar = -4f, kneeFar = 4f,
+            lean = 4f, driftX = -0.012f,
+        ),
     )
 
-    /** Tuck, over, out onto a knee, up. */
+    /** Tuck, over, out onto a knee, up, and back onto both feet. */
     private val roll = listOf(
         PoseAngles(
             shoulderNear = 32f, elbowNear = 116f, shoulderFar = -32f, elbowFar = -116f,
@@ -189,9 +281,20 @@ object MocapPoses {
             hipNear = 20f, kneeNear = -18f, hipFar = -16f, kneeFar = 30f,
             lean = 10f, driftY = 0.02f,
         ),
+        // Upright with the momentum still carrying forward, one foot ahead.
+        PoseAngles(
+            shoulderNear = 14f, elbowNear = 14f, shoulderFar = -18f, elbowFar = 12f,
+            hipNear = 14f, kneeNear = -8f, hipFar = -12f, kneeFar = 16f,
+            lean = 6f, driftY = 0.006f,
+        ),
+        PoseAngles(
+            shoulderNear = 8f, elbowNear = 4f, shoulderFar = -8f, elbowFar = 2f,
+            hipNear = 4f, kneeNear = -2f, hipFar = -4f, kneeFar = 4f,
+            lean = 2f,
+        ),
     )
 
-    /** Buckling, down on a knee, folding, still. */
+    /** Buckling, down on a knee, folding, and three frames of going still. */
     private val die = listOf(
         PoseAngles(
             shoulderNear = 26f, elbowNear = 22f, shoulderFar = -30f, elbowFar = -18f,
@@ -215,6 +318,19 @@ object MocapPoses {
             shoulderNear = -58f, elbowNear = 34f, shoulderFar = -100f, elbowFar = -26f,
             hipNear = -68f, kneeNear = 40f, hipFar = -96f, kneeFar = 28f,
             lean = 78f, headTilt = 14f, driftY = 0.28f,
+        ),
+        // Settling: one arm falling further out, the body a little flatter.
+        PoseAngles(
+            shoulderNear = -70f, elbowNear = 24f, shoulderFar = -108f, elbowFar = -16f,
+            hipNear = -76f, kneeNear = 26f, hipFar = -100f, kneeFar = 18f,
+            lean = 82f, headTilt = 10f, driftY = 0.31f,
+        ),
+        // At rest. Still not a single horizontal line, for the same reason the
+        // frame before it is not: a body has to stay readable as a body.
+        PoseAngles(
+            shoulderNear = -78f, elbowNear = 18f, shoulderFar = -112f, elbowFar = -12f,
+            hipNear = -82f, kneeNear = 16f, hipFar = -104f, kneeFar = 10f,
+            lean = 85f, headTilt = 8f, driftY = 0.33f,
         ),
     )
 }

@@ -295,7 +295,12 @@ fun WorldCanvas(
                         drawSprite(
                             x, y + dip, projection, sprite,
                             animationFor(actor.enemy.instanceId),
-                            SpriteFacing.of(0, 1),
+                            // The way it is actually going. This was one fixed
+                            // direction for every monster, so a character with
+                            // drawn back art still ran at you face-first while
+                            // heading north, and the second half of its sheet
+                            // was never reached.
+                            facingOf(actor.enemy.facingX, actor.enemy.facingY),
                             flashFor(actor.enemy.instanceId),
                         )
                         drawEnemyOverlay(x, y, projection, actor.enemy)
@@ -425,9 +430,17 @@ private fun DrawScope.drawSprite(
     val frame = sheet.frameFor(playback.frameIn(sheet), facing)
     val rect = sheet.frameRect(frame)
 
-    // Drawn a little larger than a block so a character reads against terrain.
-    val baseWidth = projection.tileWidth * projection.zoom * SPRITE_SCALE
-    val baseHeight = baseWidth * (rect.height.toFloat() / rect.width.coerceAtLeast(1))
+    // Sized by height, not width.
+    //
+    // Width was the anchor while every frame was square, and it stopped being
+    // safe the moment frames were cut to the figure: a lunging character
+    // packs into a wide cell and a standing one into a narrow cell, so
+    // anchoring on width made the same person a different height in the world
+    // depending on which poses their sheet happened to contain. Height is
+    // what a viewer reads as scale -- a character is "about two tiles tall"
+    // -- and it is the measurement that stays put across a whole set.
+    val baseHeight = projection.tileWidth * projection.zoom * SPRITE_HEIGHT_TILES
+    val baseWidth = baseHeight * (rect.width.toFloat() / rect.height.coerceAtLeast(1))
 
     // Motion the art does not supply. A clip playing frames drawn for another
     // state, or a still held as an animation, gets the difference made up here;
@@ -449,6 +462,26 @@ private fun DrawScope.drawSprite(
     val groundY = y + projection.tileHeight * projection.zoom * 0.25f
     val left = (x - drawWidth / 2f + motion.offsetX * baseWidth).toInt()
     val top = (groundY - drawHeight + motion.offsetY * baseHeight).toInt()
+
+    // A contact shadow, drawn before the body and sized from the body.
+    //
+    // The fallback shape has had one all along and the real art never did,
+    // which is most of why a drawn character read as a sticker on the world
+    // rather than as something standing in it: with nothing under the feet
+    // there is no evidence the feet are on the ground, and the eye reads the
+    // figure as floating in front of the scene.
+    //
+    // Width comes from the sprite rather than from the tile, so a wide stance
+    // casts a wide shadow, and it tightens as the body leaves the ground --
+    // a roll or a death lifts off, and a shadow that stayed the same size
+    // through that would nail the character to the floor it is leaving.
+    val lifted = ((groundY - (top + drawHeight)) / drawHeight).coerceIn(0f, 1f)
+    val shadowWidth = drawWidth * SHADOW_WIDTH * (1f - lifted * 0.45f)
+    drawOval(
+        color = Color.Black.copy(alpha = SHADOW_ALPHA * (1f - lifted * 0.6f)),
+        topLeft = Offset(x - shadowWidth / 2f, groundY - shadowWidth * SHADOW_SQUASH / 2f),
+        size = Size(shadowWidth, shadowWidth * SHADOW_SQUASH),
+    )
 
     val blit: (Float, ColorFilter?) -> Unit = { alpha, tint ->
         drawImage(
@@ -1006,7 +1039,23 @@ private const val RISE_FRACTION = 0.85f
 private const val BASE_TEXT_FRACTION = 0.26f
 private const val SPREAD_BUCKETS = 5
 private const val SPREAD_FRACTION = 0.16f
-private const val SPRITE_SCALE = 1.35f
+/**
+ * How tall a character stands, in tile widths.
+ *
+ * A tile width rather than a tile height because the tile is a diamond: its
+ * width is the full footprint and its height is the same footprint squashed by
+ * the camera, so measuring against the width is measuring against the ground
+ * the character is standing on.
+ */
+private const val SPRITE_HEIGHT_TILES = 2.15f
+
+/** How much of the sprite's width the shadow spans when standing. */
+private const val SHADOW_WIDTH = 0.72f
+
+/** The camera's tilt, near enough: a circle on the ground reads this flat. */
+private const val SHADOW_SQUASH = 0.42f
+private const val SHADOW_ALPHA = 0.42f
+
 /** Fraction of a tile width. Was 0.22; a player you cannot find is not a player. */
 private const val PLAYER_RADIUS = 0.34f
 /**
@@ -1061,4 +1110,16 @@ data class DrawableWeapon(
     val sprite: WeaponSprite,
     val image: ImageBitmap,
     val rig: WeaponRig,
+)
+
+/**
+ * A direction in world space as one of the four drawn angles.
+ *
+ * Rounded away from zero rather than truncated: a monster drifting north at a
+ * fraction of a tile per frame is still going north, and truncating would call
+ * that no movement at all and leave it facing whatever the default is.
+ */
+private fun facingOf(dx: Float, dy: Float): SpriteFacing = SpriteFacing.of(
+    if (dx > 0f) 1 else if (dx < 0f) -1 else 0,
+    if (dy > 0f) 1 else if (dy < 0f) -1 else 0,
 )

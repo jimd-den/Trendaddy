@@ -45,6 +45,22 @@ enum class PoseGuideStyle(val label: String) {
      * makes a pose authored here droppable into that ecosystem unchanged.
      */
     OPENPOSE("OpenPose"),
+
+    /**
+     * The same idea with feet, which is what DWPose adds over OpenPose.
+     *
+     * OpenPose stops at the ankle, so a guide drawn from it says where a leg
+     * ends and nothing about which way the foot points or how much of it is
+     * down -- and those are the two things that make a walk read as walking
+     * instead of as a figure being slid along. Every ankle in a generated set
+     * was then a place the model had to invent a foot, and it invented a
+     * different one each frame.
+     *
+     * Drawn from our own skeleton rather than estimated from a photograph,
+     * which is the only thing "DWPose" means here: the whole-body keypoint
+     * layout, filled in by the poses this app already authors.
+     */
+    DWPOSE("DWPose (with feet)"),
 }
 
 /**
@@ -59,7 +75,11 @@ enum class PoseGuideStyle(val label: String) {
  */
 data class PoseGuides(
     val mode: PoseGuideMode = PoseGuideMode.BUILT_IN,
-    val style: PoseGuideStyle = PoseGuideStyle.DIAGRAM,
+    /**
+     * DWPose by default: it is the one that tells a model about feet, and the
+     * feet are the part a generated walk gets wrong.
+     */
+    val style: PoseGuideStyle = PoseGuideStyle.DWPOSE,
     /** Imported poses, keyed as [PoseCell.keyOf] keys them. */
     val imported: Map<String, Pose> = emptyMap(),
     val skeleton: Skeleton = Skeleton(),

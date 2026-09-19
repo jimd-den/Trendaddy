@@ -13,6 +13,8 @@ import com.stratum.core.domain.ai.PoseRunPolicy
 import com.stratum.core.domain.ai.PoseScript
 import com.stratum.core.domain.ai.RunDecision
 import com.stratum.core.domain.ai.PoseStep
+import com.stratum.core.domain.ai.PoseView
+import com.stratum.core.domain.ai.SavedCharacter
 import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.sprite.PackedSheet
 import com.stratum.core.domain.sprite.Pose
@@ -22,6 +24,7 @@ import com.stratum.core.domain.sprite.PoseGuideStyle
 import com.stratum.core.domain.sprite.PoseGuides
 import com.stratum.core.domain.sprite.PoseSheetPlan
 import com.stratum.core.domain.sprite.PoseSheetPlanner
+import com.stratum.core.domain.sprite.SpriteNamespace
 import com.stratum.core.domain.sprite.SpriteSheet
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -70,11 +73,21 @@ class PoseForgeViewModel(
     private val posesDrawn: (String) -> Set<String>,
     /** Composites the set into a sheet and puts it in the sprite library. */
     private val composeSheet: (String, PoseSheetPlan) -> PackedSheet?,
+    /** Characters already on disk, newest first, so one can be picked up again. */
+    private val savedCharacters: () -> List<SavedCharacter>,
+    private val deleteCharacter: (String) -> Unit,
+    /** Writes the packed sheet out where the rest of the device can reach it. */
+    private val exportSheet: (String, String) -> Boolean,
+    /** Writes every full-size pose out as one archive. */
+    private val exportPoses: (String, String) -> Boolean,
     private val isProviderConfigured: () -> Boolean,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(
-        PoseForgeUiState(providerConfigured = isProviderConfigured()),
+        PoseForgeUiState(
+            providerConfigured = isProviderConfigured(),
+            characters = savedCharacters(),
+        ),
     )
     val state: StateFlow<PoseForgeUiState> = _state.asStateFlow()
 
@@ -86,13 +99,16 @@ class PoseForgeViewModel(
             providerConfigured = isProviderConfigured(),
             hasReference = current.setId?.let(hasReference) ?: false,
             drawn = current.setId?.let(posesDrawn).orEmpty(),
+            characters = savedCharacters(),
         )
     }
 
     fun updateSubject(subject: String) {
-        val setId = setIdFor(subject)
+        val setId = setIdFor(subject, _state.value.role)
+        val poses = setId?.let(posesDrawn).orEmpty()
         _state.value = _state.value.copy(
             subject = subject,
+            drawsAwayView = poses.anyAway() || _state.value.drawsAwayView,
             setId = setId,
             // Typing a subject that was worked on before finds its poses again,
             // which is what makes coming back to a character cheap. Asked as an
@@ -169,6 +185,60 @@ class PoseForgeViewModel(
 
     fun updateStyle(style: String) {
         _state.value = _state.value.copy(style = style)
+    }
+
+    /**
+     * Changes what the character is for, and moves it.
+     *
+     * The role is part of the id, so switching it points at a different set.
+     * Re-reading what is on disk under the new id is the honest thing to do:
+     * the alternative is a screen showing forty drawn poses that the next
+     * generation will not find.
+     */
+    fun selectRole(role: CharacterRole) {
+        val current = _state.value
+        val setId = setIdFor(current.subject, role)
+        val moved = setId?.let(posesDrawn).orEmpty()
+        // Said, because the drawn count is about to change under them. The
+        // role is part of the id, so switching it points at a different set --
+        // and a screen that silently went from forty poses to none reads as
+        // having deleted them.
+        val note = when {
+            setId == null -> null
+            current.drawn.isNotEmpty() && moved.isEmpty() ->
+                "That is a different character: ${role.label.lowercase()} art is filed " +
+                    "separately. The ${current.drawn.size} pose(s) you drew are still there " +
+                    "under the other one."
+            else -> null
+        }
+        _state.value = current.copy(
+            message = note,
+            role = role,
+            setId = setId,
+            hasReference = setId?.let(hasReference) ?: false,
+            drawn = setId?.let(posesDrawn).orEmpty(),
+            guides = setId?.let(loadGuides) ?: PoseGuides(),
+            savedSheet = null,
+        )
+    }
+
+    /**
+     * Sets how many frames one animation gets.
+     *
+     * Only ever changes that one animation. Frames already drawn are left
+     * alone: the sampling takes instructions from the start of the cycle, so
+     * frame zero of a four frame walk and of a twelve frame walk are the same
+     * pose, and raising the count adds work rather than invalidating it.
+     */
+    fun selectFrames(state: AnimationState, count: Int) {
+        val wanted = count.coerceIn(PoseScript.MIN_FRAMES, PoseScript.MAX_FRAMES)
+        _state.value = _state.value.copy(
+            frames = _state.value.frames + (state to wanted),
+        )
+    }
+
+    fun toggleAwayView(on: Boolean) {
+        _state.value = _state.value.copy(drawsAwayView = on)
     }
 
     fun selectScope(scope: PoseScope) {
@@ -266,7 +336,11 @@ class PoseForgeViewModel(
             failures = emptyMap(),
             savedSheet = null,
         )
-        job = viewModelScope.launch {
+        // The one run that outlives the screen. The reference is a single
+        // request and the sheet pack is seconds of work, so those stay on the
+        // view model's own scope -- this is the quarter of an hour, and it is
+        // the only one worth surviving a person leaving the forge.
+        job = PoseRun.start {
             var failures = emptyMap<String, String>()
             var abandoned: String? = null
 
@@ -306,6 +380,13 @@ class PoseForgeViewModel(
                         withContext(Dispatchers.IO) { savePose(setId, step.key, image.bytes) }
                         val done = withContext(Dispatchers.IO) { posesDrawn(setId) }
                         _state.value = _state.value.copy(drawn = done, attempt = 1)
+                        // Reported for the notification, which is the only
+                        // thing a person can see once they have left the app.
+                        PoseRun.report(
+                            label = current.subject.trim().ifBlank { "Character" },
+                            done = script.steps.count { it.key in done },
+                            total = script.steps.size,
+                        )
                         continue@steps
                     }
 
@@ -376,6 +457,9 @@ class PoseForgeViewModel(
     fun stop() {
         job?.cancel()
         job = null
+        // Also the run itself, which no longer belongs to this scope: without
+        // this, Stop would clear the screen and leave the generations going.
+        PoseRun.stop()
         _state.value = _state.value.copy(
             busy = false,
             currentStep = null,
@@ -400,18 +484,37 @@ class PoseForgeViewModel(
             return
         }
 
+        // Counted against every angle this character *could* have, not the
+        // ones the toggle happens to be showing.
+        //
+        // The script is built from the toggle, and the toggle is UI state: it
+        // is off by default and nothing restored it when a character was
+        // reopened. So a set generated with away frames, closed and opened
+        // again, packed as front-only -- the away art was on disk, was paid
+        // for, and the sheet quietly left it out. What exists on disk is the
+        // only honest answer to what the sheet should contain.
+        val onDisk = current.scope.scriptFor(current.frames, PoseView.entries)
+
         // Only the states that actually have frames, and only as many as
         // arrived: a row planned for four and given two would leave two cells
-        // of nothing in the middle of the animation.
-        val counts = current.script.states.associateWith { state ->
-            current.script.stepsFor(state).count { it.key in drawn }
-        }.filterValues { it > 0 }
+        // of nothing in the middle of the animation. Counted per view by the
+        // script itself; the view model used to do this arithmetic too, and
+        // having two copies is how it came to be right in one and wrong in
+        // the other.
+        val counts = onDisk.drawnCounts(drawn)
 
         val plan = PoseSheetPlanner.plan(
             id = setId,
             name = current.subject.trim().ifBlank { "Character" },
             frameCounts = counts,
             cellSize = current.cellSize,
+            // Only the angles that actually came back. Planning a block of
+            // rows for an away view nobody drew would leave the bottom half
+            // of the sheet empty and the renderer would walk the character
+            // north as a hole in the world.
+            views = onDisk.drawnViews(drawn)
+                .ifEmpty { listOf(PoseView.FRONT) }
+                .map { it.keySuffix to it.serves },
         )
         if (plan == null) {
             _state.value = current.copy(error = "There is nothing to pack yet.")
@@ -465,9 +568,98 @@ class PoseForgeViewModel(
      * the same description again finds the same set rather than paying for it
      * twice.
      */
-    private fun setIdFor(subject: String): String? {
+    /**
+     * Opens a character that is already on disk.
+     *
+     * Typing the subject again used to be the only way back to a set, because
+     * the id is derived from it -- so a character was reachable only by
+     * remembering, exactly, what it had been called. Forty generations of work
+     * behind a spelling test.
+     */
+    fun openCharacter(character: SavedCharacter) {
+        val poses = posesDrawn(character.setId)
+        _state.value = _state.value.copy(
+            subject = character.name,
+            setId = character.setId,
+            // Read off the poses rather than left as whatever the toggle was:
+            // a character with away frames should say so when it is opened,
+            // not look like one that never had any.
+            drawsAwayView = poses.anyAway(),
+            // Read back off the id rather than left as whatever was last
+            // picked: opening an enemy and then generating would otherwise
+            // write the next frames into the hero's set.
+            role = if (SpriteNamespace.servesMonster(character.setId)) {
+                CharacterRole.ENEMY
+            } else {
+                CharacterRole.HERO
+            },
+            hasReference = hasReference(character.setId),
+            drawn = posesDrawn(character.setId),
+            guides = loadGuides(character.setId),
+            savedSheet = null,
+            failures = emptyMap(),
+            message = null,
+            error = null,
+        )
+    }
+
+    fun forgetCharacter(setId: String) {
+        deleteCharacter(setId)
+        val current = _state.value
+        val cleared = current.setId == setId
+        _state.value = current.copy(
+            characters = savedCharacters(),
+            setId = if (cleared) null else current.setId,
+            subject = if (cleared) "" else current.subject,
+            hasReference = if (cleared) false else current.hasReference,
+            drawn = if (cleared) emptySet() else current.drawn,
+            savedSheet = if (cleared) null else current.savedSheet,
+            message = "Deleted.",
+        )
+    }
+
+    /**
+     * Hands the packed sheet to the device.
+     *
+     * Only offered once a sheet has been packed: exporting the set before that
+     * would write whatever the last pack produced, which may be nothing or may
+     * be several runs old, and neither is what the button appears to promise.
+     */
+    fun exportSheet() {
+        val sheet = _state.value.savedSheet
+        if (sheet == null) {
+            _state.value = _state.value.copy(error = "Pack the sheet first, then export it.")
+            return
+        }
+        val name = _state.value.subject.trim().ifBlank { sheet.name }
+        _state.value = if (exportSheet(sheet.id, name)) {
+            _state.value.copy(message = "Sheet exported.", error = null)
+        } else {
+            _state.value.copy(error = "The sheet could not be exported.")
+        }
+    }
+
+    fun exportPoses() {
+        val setId = _state.value.setId
+        if (setId == null || _state.value.drawn.isEmpty()) {
+            _state.value = _state.value.copy(error = "There are no poses to export yet.")
+            return
+        }
+        val name = _state.value.subject.trim().ifBlank { "character" }
+        _state.value = if (exportPoses(setId, name)) {
+            _state.value.copy(message = "Poses exported.", error = null)
+        } else {
+            _state.value.copy(error = "The poses could not be exported.")
+        }
+    }
+
+    /** Whether any of these pose keys is an away frame. */
+    private fun Set<String>.anyAway(): Boolean =
+        any { it.endsWith(PoseView.AWAY.keySuffix) }
+
+    private fun setIdFor(subject: String, role: CharacterRole): String? {
         val slug = subject.lowercase().replace(NON_ID, "_").trim('_').take(MAX_SLUG)
-        return if (slug.isBlank()) null else "pose:$slug"
+        return if (slug.isBlank()) null else "${role.namespace}$slug"
     }
 
     companion object {
@@ -496,31 +688,104 @@ class PoseForgeViewModel(
             dropPose: (String, String) -> Unit,
             posesDrawn: (String) -> Set<String>,
             composeSheet: (String, PoseSheetPlan) -> PackedSheet?,
+            savedCharacters: () -> List<SavedCharacter> = { emptyList() },
+            deleteCharacter: (String) -> Unit = {},
+            exportSheet: (String, String) -> Boolean = { _, _ -> false },
+            exportPoses: (String, String) -> Boolean = { _, _ -> false },
             isProviderConfigured: () -> Boolean,
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T = PoseForgeViewModel(
                 drawReference, drawPose, guideFor, readGuideImage, readGuideJson, loadGuides,
                 saveGuides, saveReference, loadReference, hasReference, savePose, dropPose,
-                posesDrawn, composeSheet, isProviderConfigured,
+                posesDrawn, composeSheet, savedCharacters, deleteCharacter, exportSheet,
+                exportPoses, isProviderConfigured,
             ) as T
         }
     }
 }
 
 /** How much of a character to draw. Every state is more calls and more money. */
-enum class PoseScope(val label: String, val script: PoseScript) {
+/**
+ * What a character is being drawn for.
+ *
+ * Separate from [PoseScope], which says how many animations to draw. They
+ * correlate -- an enemy usually needs fewer -- but they are not the same
+ * question, and answering both with one control is what produced a world in
+ * which every monster wore the player's face. The choice is written into the
+ * set id, so the art is filed where the game looks for that kind of actor.
+ */
+enum class CharacterRole(val label: String, val namespace: String) {
+    HERO("Hero", SpriteNamespace.HERO),
+    ENEMY("Enemy", SpriteNamespace.MONSTER),
+}
+
+/**
+ * How many animations to draw.
+ *
+ * Labelled by what it does rather than by who it is for. It used to be
+ * "Enemy" and "Full character", sitting one row above a Hero/Enemy chip row
+ * that decides something else entirely -- two chips reading "Enemy", side by
+ * side, controlling different things. Tapping either looked like the other had
+ * changed on its own.
+ */
+enum class PoseScope(val label: String) {
     /** Idle, walk, attack, death: what an enemy is actually seen doing. */
-    ENEMY("Enemy", PoseScript.enemy()),
+    ENEMY("4 animations"),
 
     /** Everything, for the character a player looks at all session. */
-    FULL("Full character", PoseScript.full()),
+    FULL("All 7");
+
+    /** The script for this scope at the frame counts and angles the person chose. */
+    fun scriptFor(
+        frames: Map<AnimationState, Int>,
+        views: List<PoseView>,
+    ): PoseScript = when (this) {
+        ENEMY -> PoseScript.enemy(frames, views)
+        FULL -> PoseScript.full(frames, views)
+    }
+
+    val states: List<AnimationState>
+        get() = when (this) {
+            ENEMY -> listOf(
+                AnimationState.IDLE,
+                AnimationState.WALK,
+                AnimationState.ATTACK,
+                AnimationState.DIE,
+            )
+            FULL -> AnimationState.generatedRowOrder
+        }
 }
 
 data class PoseForgeUiState(
     val subject: String = "",
     val style: String = "",
     val scope: PoseScope = PoseScope.ENEMY,
+    /**
+     * Whether this character is the player's or something it meets.
+     *
+     * A hero by default. It used to default to enemy, which meant a character
+     * drawn by somebody who never touched the chip was filed under the monster
+     * namespace -- and the main screen, which lists art a player can wear,
+     * never saw it. The commonest thing to make is the character you play, and
+     * an enemy is the deliberate choice.
+     */
+    val role: CharacterRole = CharacterRole.HERO,
+    /**
+     * How many frames each animation gets.
+     *
+     * Per state rather than one number, because the states do not need the
+     * same count: an idle is watched for minutes and a death is seen once.
+     */
+    val frames: Map<AnimationState, Int> = emptyMap(),
+    /**
+     * Whether the away-facing angle is drawn too.
+     *
+     * Off by default: it doubles the cost and the time of a character, and a
+     * character with only a front is perfectly playable -- it simply walks
+     * north with its face towards you.
+     */
+    val drawsAwayView: Boolean = false,
     val cellSize: Int = PoseSheetPlanner.DEFAULT_CELL,
     val setId: String? = null,
     val hasReference: Boolean = false,
@@ -539,8 +804,17 @@ data class PoseForgeUiState(
     val error: String? = null,
     /** Which poses this character is drawn against, and how they are drawn. */
     val guides: PoseGuides = PoseGuides(),
+    /** Every character on disk, so one can be picked up without retyping it. */
+    val characters: List<SavedCharacter> = emptyList(),
 ) {
-    val script: PoseScript get() = scope.script
+    val views: List<PoseView>
+        get() = if (drawsAwayView) listOf(PoseView.FRONT, PoseView.AWAY) else listOf(PoseView.FRONT)
+
+    val script: PoseScript get() = scope.scriptFor(frames, views)
+
+    /** How many frames [state] is set to, falling back to the default. */
+    fun framesFor(state: AnimationState): Int =
+        frames[state] ?: PoseScript.DEFAULT_FRAMES
 
     /** Steps with an imported pose behind them rather than a built-in one. */
     fun isImported(step: PoseStep): Boolean = step.key in guides.imported

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -31,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
@@ -51,7 +53,10 @@ import com.stratum.core.designsystem.theme.Space
 import com.stratum.core.designsystem.theme.Stroke
 import com.stratum.core.designsystem.theme.StratumTheme
 import com.stratum.core.designsystem.theme.safeContent
+import com.stratum.core.domain.ai.PoseScript
 import com.stratum.core.domain.ai.PoseStep
+import com.stratum.core.domain.ai.SavedCharacter
+import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.sprite.PoseGuideMode
 import com.stratum.core.domain.sprite.PoseGuideStyle
 import com.stratum.core.domain.sprite.SpriteValidation
@@ -111,6 +116,9 @@ fun PoseForgeScreen(
         onSubjectChange = viewModel::updateSubject,
         onStyleChange = viewModel::updateStyle,
         onScopeChange = viewModel::selectScope,
+        onRoleChange = viewModel::selectRole,
+        onFramesChange = viewModel::selectFrames,
+        onAwayViewChange = viewModel::toggleAwayView,
         onCellSizeChange = viewModel::selectCellSize,
         onDrawReference = viewModel::drawReferencePose,
         onBuildAnimations = viewModel::buildAnimations,
@@ -122,6 +130,10 @@ fun PoseForgeScreen(
         onGuideModeChange = viewModel::selectGuideMode,
         onGuideStyleChange = viewModel::selectGuideStyle,
         onClearImported = viewModel::clearImported,
+        onOpenCharacter = viewModel::openCharacter,
+        onForgetCharacter = viewModel::forgetCharacter,
+        onExportSheet = viewModel::exportSheet,
+        onExportPoses = viewModel::exportPoses,
         onDismiss = viewModel::dismissMessage,
         onBack = onBack,
         onOpenSettings = onOpenSettings,
@@ -137,12 +149,19 @@ fun PoseForgeContent(
     onSubjectChange: (String) -> Unit = {},
     onStyleChange: (String) -> Unit = {},
     onScopeChange: (PoseScope) -> Unit = {},
+    onRoleChange: (CharacterRole) -> Unit = {},
+    onFramesChange: (AnimationState, Int) -> Unit = { _, _ -> },
+    onAwayViewChange: (Boolean) -> Unit = {},
     onCellSizeChange: (Int) -> Unit = {},
     onDrawReference: () -> Unit = {},
     onBuildAnimations: () -> Unit = {},
     onStop: () -> Unit = {},
     onBuildSheet: () -> Unit = {},
     onRedrawPose: (String) -> Unit = {},
+    onOpenCharacter: (SavedCharacter) -> Unit = {},
+    onForgetCharacter: (String) -> Unit = {},
+    onExportSheet: () -> Unit = {},
+    onExportPoses: () -> Unit = {},
     onGuideModeChange: (PoseGuideMode) -> Unit = {},
     onGuideStyleChange: (PoseGuideStyle) -> Unit = {},
     onClearImported: (PoseStep) -> Unit = {},
@@ -200,7 +219,13 @@ fun PoseForgeContent(
         Notice(state.message, state.error, onDismiss)
 
         Spacer(Modifier.height(Space.large))
-        CharacterPanel(state, onSubjectChange, onStyleChange, onScopeChange)
+        SavedPanel(state, onOpenCharacter, onForgetCharacter)
+
+        Spacer(Modifier.height(Space.medium))
+        CharacterPanel(
+            state, onSubjectChange, onStyleChange, onScopeChange, onRoleChange,
+            onFramesChange, onAwayViewChange,
+        )
 
         Spacer(Modifier.height(Space.medium))
         ReferencePanel(state, reference, onDrawReference)
@@ -215,9 +240,79 @@ fun PoseForgeContent(
         )
 
         Spacer(Modifier.height(Space.medium))
-        SheetPanel(state, sheetImage, onCellSizeChange, onBuildSheet)
+        SheetPanel(state, sheetImage, onCellSizeChange, onBuildSheet, onExportSheet, onExportPoses)
 
         Spacer(Modifier.height(Space.huge))
+    }
+}
+
+/**
+ * Every character already on disk.
+ *
+ * The set id is derived from the subject line, so before this the only route
+ * back to a character was to retype what it had been called, exactly. That put
+ * half an hour of generation and real money behind a spelling test, and there
+ * was no way to see what existed or to get rid of something that did not work.
+ */
+@Composable
+private fun SavedPanel(
+    state: PoseForgeUiState,
+    onOpen: (SavedCharacter) -> Unit,
+    onForget: (String) -> Unit,
+) {
+    if (state.characters.isEmpty()) return
+    val colors = StratumTheme.colors
+
+    StratumSection(
+        title = "Saved characters",
+        subtitle = "${state.characters.size} on this device",
+    ) {
+        state.characters.forEach { character ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = character.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (character.setId == state.setId) {
+                            colors.accent
+                        } else {
+                            colors.ink
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        // The pose count is the honest measure of progress:
+                        // a character with a reference and no poses is an
+                        // idea, not a character.
+                        text = buildString {
+                            append("${character.posesDrawn} pose(s)")
+                            if (!character.hasReference) append(" · no reference")
+                            if (character.sheetId != null) append(" · packed")
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.inkMuted,
+                    )
+                }
+                StratumAction(
+                    label = "Open",
+                    onClick = { onOpen(character) },
+                    emphasis = ActionEmphasis.SECONDARY,
+                    enabled = !state.busy,
+                )
+                Spacer(Modifier.width(Space.small))
+                StratumAction(
+                    label = "Delete",
+                    onClick = { onForget(character.setId) },
+                    emphasis = ActionEmphasis.QUIET,
+                    enabled = !state.busy,
+                )
+            }
+            Spacer(Modifier.height(Space.small))
+        }
     }
 }
 
@@ -227,6 +322,9 @@ private fun CharacterPanel(
     onSubjectChange: (String) -> Unit,
     onStyleChange: (String) -> Unit,
     onScopeChange: (PoseScope) -> Unit,
+    onRoleChange: (CharacterRole) -> Unit,
+    onFramesChange: (AnimationState, Int) -> Unit,
+    onAwayViewChange: (Boolean) -> Unit,
 ) {
     val colors = StratumTheme.colors
 
@@ -240,6 +338,28 @@ private fun CharacterPanel(
             enabled = !state.busy,
             minLines = 2,
         )
+
+        // Asked before anything is drawn, because it decides where the art is
+        // filed and therefore what the game does with it. Left unasked, a
+        // character became both the player and every monster at once.
+        Spacer(Modifier.height(Space.small))
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(Space.small),
+        ) {
+            Text(
+                text = "Drawn for",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkMuted,
+            )
+            CharacterRole.entries.forEach { option ->
+                StratumChip(
+                    label = option.label,
+                    selected = state.role == option,
+                    onClick = { onRoleChange(option) },
+                )
+            }
+        }
 
         Spacer(Modifier.height(Space.small))
         Row(
@@ -276,11 +396,98 @@ private fun CharacterPanel(
             }
         }
 
+        // One row per animation, because the states do not want the same
+        // count: an idle is looked at for minutes on end and a death is seen
+        // once. A single number either starves the idle or pays for frames the
+        // death will never show.
+        // Offered next to the frame counts because it is the same kind of
+        // decision and the same kind of cost: both of them multiply the number
+        // of generations, and both are cheaper to decide now than to discover
+        // halfway through a run.
+        Spacer(Modifier.height(Space.medium))
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(Space.small),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Angles",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkMuted,
+                modifier = Modifier.width(SIDE_LABEL),
+            )
+            StratumChip(
+                label = "Towards only",
+                selected = !state.drawsAwayView,
+                onClick = { onAwayViewChange(false) },
+            )
+            StratumChip(
+                label = "Towards + away",
+                selected = state.drawsAwayView,
+                onClick = { onAwayViewChange(true) },
+            )
+        }
+        Spacer(Modifier.height(Space.small))
+        Text(
+            text = if (state.drawsAwayView) {
+                "Doubles the generations. Without it a character walking north keeps its " +
+                    "face to you, because flipping the front cannot make a back of a head."
+            } else {
+                "One angle, mirrored for the other side. A character walking away keeps " +
+                    "its face towards you."
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.inkMuted,
+        )
+
+        Spacer(Modifier.height(Space.medium))
+        Text(
+            text = "Frames per animation",
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.inkMuted,
+        )
+        state.scope.states.forEach { animation ->
+            Spacer(Modifier.height(Space.small))
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(Space.small),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = animation.name.lowercase().replaceFirstChar { it.uppercase() },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.inkMuted,
+                    modifier = Modifier.width(SIDE_LABEL),
+                )
+                PoseScript.FRAME_CHOICES.forEach { count ->
+                    StratumChip(
+                        // Shown as what it costs, not as what it stores. With
+                        // both angles on, twelve frames is twenty-four
+                        // generations for this one animation, and that is the
+                        // number worth seeing before starting rather than
+                        // after paying.
+                        label = if (state.drawsAwayView) "$count (${count * 2})" else "$count",
+                        selected = state.framesFor(animation) == count,
+                        onClick = { onFramesChange(animation, count) },
+                    )
+                }
+            }
+        }
+
+        if (state.drawsAwayView) {
+            Spacer(Modifier.height(Space.small))
+            Text(
+                text = "In brackets: generations for that animation, both angles counted.",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkMuted,
+            )
+        }
+
         Spacer(Modifier.height(Space.small))
         // Said in generations rather than in states, because that is the number
         // that costs money and takes minutes.
         Text(
-            text = "${state.scope.script.steps.size} poses, one generation each, " +
+            text = "${state.script.steps.size} poses, one generation each, " +
                 "plus the reference.",
             style = MaterialTheme.typography.labelSmall,
             color = colors.inkMuted,
@@ -628,6 +835,8 @@ private fun SheetPanel(
     sheetImage: ImageBitmap?,
     onCellSizeChange: (Int) -> Unit,
     onBuildSheet: () -> Unit,
+    onExportSheet: () -> Unit,
+    onExportPoses: () -> Unit,
 ) {
     val colors = StratumTheme.colors
 
@@ -686,6 +895,33 @@ private fun SheetPanel(
             enabled = state.canBuildSheet,
         )
 
+        // Both offered, because they answer different questions. The sheet is
+        // what an engine wants; the poses are the full-size originals, which
+        // are what a person wants in order to retouch a frame or pack the set
+        // differently later. Packing throws away most of the pixels.
+        Spacer(Modifier.height(Space.small))
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.small)) {
+            StratumAction(
+                label = "Export sheet",
+                onClick = onExportSheet,
+                emphasis = ActionEmphasis.SECONDARY,
+                enabled = !state.busy && state.savedSheet != null,
+            )
+            StratumAction(
+                label = "Export poses",
+                onClick = onExportPoses,
+                emphasis = ActionEmphasis.QUIET,
+                enabled = !state.busy && state.drawn.isNotEmpty(),
+            )
+        }
+        Spacer(Modifier.height(Space.small))
+        Text(
+            text = "Exports go to Downloads/${'"'}Stratum${'"'} and open the share sheet. " +
+                "The sheet is one PNG; the poses are every frame at full size, zipped.",
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.inkMuted,
+        )
+
         if (state.completed in 1 until state.total) {
             Spacer(Modifier.height(Space.small))
             Text(
@@ -725,3 +961,6 @@ private val REFERENCE_HEIGHT = 320.dp
 private val SHEET_HEIGHT = 240.dp
 /** Enough for "special" without pushing the pose squares off a narrow phone. */
 private const val WIDTH_OF_LABEL = 0.3f
+
+/** Wide enough for the longest animation name, so the chip rows line up. */
+private val SIDE_LABEL = 72.dp
