@@ -1,5 +1,8 @@
 package com.stratum.app
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -43,21 +46,44 @@ import com.stratum.feature.forge.ForgeScreen
 import com.stratum.feature.forge.ForgeViewModel
 import com.stratum.feature.forge.SpriteForgeScreen
 import com.stratum.feature.forge.SpriteForgeViewModel
+import com.stratum.feature.forge.PoseForgeScreen
+import com.stratum.feature.forge.WeaponForgeScreen
+import com.stratum.feature.forge.WeaponForgeViewModel
+import com.stratum.feature.forge.PoseForgeViewModel
+import com.stratum.feature.forge.SpriteMapperScreen
+import com.stratum.feature.forge.SpriteMapperViewModel
 import com.stratum.feature.hero.ClassForgeScreen
 import com.stratum.feature.hero.ClassForgeViewModel
 import com.stratum.core.data.hero.CustomClassStore
+import android.graphics.BitmapFactory
 import com.stratum.core.data.sprite.GeneratedSheetPreparer
+import com.stratum.core.data.sprite.PoseGuideRenderer
+import com.stratum.core.data.sprite.PoseSheetComposer
+import com.stratum.core.data.sprite.WeaponPreparer
+import com.stratum.core.data.sprite.SpriteAtlasBaker
 import com.stratum.core.domain.sprite.SheetPreparation
+import com.stratum.core.domain.sprite.SpriteMapper
+import com.stratum.core.domain.ai.ImageReference
+import com.stratum.core.domain.ai.PoseScript
+import com.stratum.core.domain.ai.PoseStep
+import com.stratum.core.domain.sprite.OpenPoseImageReader
+import com.stratum.core.domain.sprite.OpenPoseImport
+import com.stratum.core.domain.sprite.OpenPoseJson
+import com.stratum.core.domain.sprite.PoseGuides
+import com.stratum.core.domain.sprite.Skeleton
+import com.stratum.core.domain.sprite.WeaponPosing
+import com.stratum.core.domain.sprite.WeaponRig
 import com.stratum.core.domain.content.CustomClassPack
 import com.stratum.core.domain.content.HeroClassDefinition
 import com.stratum.core.designsystem.component.StratumChip
 import com.stratum.feature.play.DrawableSprite
+import com.stratum.feature.play.DrawableWeapon
 import com.stratum.feature.play.SpriteKey
 import com.stratum.feature.play.PlayScreen as PlayScreenRoute
 import com.stratum.feature.play.PlayViewModel
 
 /** Top-level destinations. Deliberately few: the game is the app, not a tab in it. */
-private enum class Destination { HOME, PLAY, CLASSES, FORGE, SPRITES, SETTINGS, STUDIO }
+private enum class Destination { HOME, PLAY, CLASSES, FORGE, SPRITES, POSES, WEAPONS, MAPPER, SETTINGS, STUDIO }
 
 /**
  * The app shell.
@@ -105,6 +131,9 @@ fun StratumApp(
     // Sheets generated this session join the loaded packs, so a drawing made
     // five minutes ago is used by the world exactly like one a pack shipped.
     var spriteRevision by remember { mutableStateOf(0) }
+    // What the player is holding. A weapon is a separate drawing attached at
+    // the hand, so changing it is changing one id -- no character is redrawn.
+    var equippedWeaponId by remember { mutableStateOf<String?>(null) }
     val spriteSheets = remember(spriteRevision) { ai.sprites.all() }
     val contentWithSprites = remember(content, spriteSheets) {
         content.withSpriteSheets(spriteSheets)
@@ -113,8 +142,22 @@ fun StratumApp(
     // Keyed on the chosen class: the player's art is a property of who they are
     // playing, and resolving it without that was the whole bug — every class
     // was drawn with whichever hero sheet happened to be newest.
-    val spriteResolver = remember(spriteRevision, contentWithSprites, heroClassId) {
-        { key: SpriteKey ->
+    val spriteResolver = remember(spriteRevision, contentWithSprites, heroClassId, equippedWeaponId) {
+        // The resolver is asked for a sprite on every drawn frame, for every
+        // actor, so anything built here has to be built once and kept. A rig is
+        // a map the size of the sheet's frame count; rebuilding it per frame
+        // would allocate one per actor per frame inside the draw loop.
+        val rigs = HashMap<String, WeaponRig>()
+        val held = equippedWeaponId?.let { id ->
+            val weapon = ai.weapons.find(id)
+            val bitmap = ai.weapons.bitmapFor(id)
+            if (weapon != null && bitmap != null) weapon to bitmap.asImageBitmap() else null
+        }
+
+        // Named rather than left as a bare trailing lambda: with a statement
+        // above it, the compiler reads `{ ... }` as an argument to that
+        // statement instead of as the value being remembered.
+        val resolve: (SpriteKey) -> DrawableSprite? = { key: SpriteKey ->
             // Candidates in order of preference rather than one guess. The
             // first choice can resolve to a sheet with no usable image — one
             // that came back blank, or a pack sheet with no pixels on this
@@ -136,10 +179,35 @@ fun StratumApp(
 
             candidates.distinctBy { it.id }.firstNotNullOfOrNull { found ->
                 ai.sprites.drawableBitmapFor(found.id)?.let { bitmap ->
-                    DrawableSprite(found, bitmap.asImageBitmap())
+                    DrawableSprite(
+                        sheet = found,
+                        image = bitmap.asImageBitmap(),
+                        // Only the player carries one for now. Giving monsters
+                        // weapons is the same mechanism plus a decision about
+                        // which monster holds what, which is pack data.
+                        weapon = if (key == SpriteKey.Player && held != null) {
+                            DrawableWeapon(
+                                sprite = held.first,
+                                image = held.second,
+                                rig = rigs.getOrPut(found.id) {
+                                    WeaponPosing.rigFor(
+                                        sheet = found,
+                                        fit = ai.weaponFits.fitFor(found.id),
+                                        // The poses the art was drawn against.
+                                        // Rigging against anything else hangs
+                                        // the sword off a hand that is not there.
+                                        guides = ai.poseGuides.guidesFor(found.id),
+                                    )
+                                },
+                            )
+                        } else {
+                            null
+                        },
+                    )
                 }
             }
         }
+        resolve
     }
 
     when (destination) {
@@ -185,7 +253,7 @@ fun StratumApp(
 
         Destination.CLASSES -> {
             val classViewModel: ClassForgeViewModel = viewModel(
-                key = "classes-${'$'}classRevision",
+                key = "classes-$classRevision",
                 factory = ClassForgeViewModel.factory(
                     content = content,
                     saveClass = { hero ->
@@ -263,6 +331,212 @@ fun StratumApp(
                 // rather than as an empty rectangle the player has to
                 // interpret.
                 previewFor = { id -> ai.sprites.drawableBitmapFor(id)?.asImageBitmap() },
+                onMapFrames = { destination = Destination.MAPPER },
+                onPoseForge = { destination = Destination.POSES },
+                onWeaponForge = { destination = Destination.WEAPONS },
+            )
+        }
+
+        Destination.POSES -> {
+            val poseViewModel: PoseForgeViewModel = viewModel(
+                factory = PoseForgeViewModel.factory(
+                    drawReference = { request, observer ->
+                        ai.generateBasePose(request, observer)
+                    },
+                    drawPose = { request, observer -> ai.generatePoseFrame(request, observer) },
+                    guideFor = { step, guides ->
+                        // The same skeleton the weapon rig reads, drawn. One
+                        // source of truth for where the body is, so the art and
+                        // the sword can never disagree about it.
+                        guides.poseFor(
+                            state = step.state,
+                            index = step.index,
+                            frameCount = PoseScript.posesFor(step.state).size,
+                        )?.let { pose ->
+                            PoseGuideRenderer.render(pose, style = guides.style)
+                                ?.let { ImageReference(it) }
+                        }
+                    },
+                    readGuideImage = { bytes ->
+                        // Pose libraries ship the rendered skeleton, not its
+                        // keypoints, so the picture is read back to find the
+                        // joints the weapon needs.
+                        val bitmap = SpriteAtlasBaker.decode(bytes)
+                        val pose = bitmap?.let {
+                            val found = OpenPoseImageReader.read(
+                                pixels = SpriteAtlasBaker.pixelsOf(it),
+                                width = it.width,
+                                height = it.height,
+                            )
+                            it.recycle()
+                            found?.let(OpenPoseImport::toPose)
+                        }
+                        pose?.let(OpenPoseImport::normalised)
+                    },
+                    readGuideJson = { text ->
+                        OpenPoseJson.parse(text)
+                            ?.let(OpenPoseImport::toPose)
+                            ?.let(OpenPoseImport::normalised)
+                    },
+                    loadGuides = ai.poseGuides::guidesFor,
+                    saveGuides = { setId, guides ->
+                        ai.poseGuides.save(setId, guides)
+                        // The resolver caches rigs, so a changed pose source has
+                        // to rebuild them or the sword keeps the old hand.
+                        spriteRevision++
+                    },
+                    saveReference = ai.poses::saveReference,
+                    loadReference = ai.poses::reference,
+                    hasReference = ai.poses::hasReference,
+                    savePose = ai.poses::savePose,
+                    dropPose = ai.poses::deletePose,
+                    posesDrawn = ai.poses::keysIn,
+                    composeSheet = { setId, plan ->
+                        // Loaded by key rather than all at once: a full
+                        // character is forty 1024-pixel images, which is more
+                        // than a phone will hold decoded at the same time.
+                        val composed = PoseSheetComposer.compose(plan) { key ->
+                            ai.poses.pose(setId, key)
+                        }
+                        composed?.let {
+                            ai.sprites.save(it.sheet, it.bytes)
+                            spriteRevision++
+                            it.packed()
+                        }
+                    },
+                    isProviderConfigured = ai::isConfigured,
+                ),
+            )
+            // Which frame an imported pose is destined for. The picker hands
+            // back a Uri and nothing else, so the step has to be remembered
+            // across the trip out to the system and back.
+            var importingStep by remember { mutableStateOf<PoseStep?>(null) }
+            val poseFilePicker = rememberLauncherForActivityResult(
+                ActivityResultContracts.PickVisualMedia(),
+            ) { uri ->
+                val step = importingStep
+                importingStep = null
+                if (uri != null && step != null) {
+                    val bytes = runCatching {
+                        context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    }.getOrNull()
+                    if (bytes != null) poseViewModel.importGuideImage(step, bytes)
+                }
+            }
+
+            PoseForgeScreen(
+                viewModel = poseViewModel,
+                modifier = modifier,
+                onImportPose = { step ->
+                    importingStep = step
+                    poseFilePicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                    )
+                },
+                onBack = { destination = Destination.SPRITES },
+                onOpenSettings = { destination = Destination.SETTINGS },
+                referenceFor = { setId ->
+                    ai.poses.reference(setId)?.let { bytes ->
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                    }
+                },
+                sheetPreviewFor = { id -> ai.sprites.drawableBitmapFor(id)?.asImageBitmap() },
+            )
+        }
+
+        Destination.WEAPONS -> {
+            val weaponViewModel: WeaponForgeViewModel = viewModel(
+                factory = WeaponForgeViewModel.factory(
+                    drawWeapon = { request, observer -> ai.generateWeapon(request, observer) },
+                    storeWeapon = { request, bytes ->
+                        // Keyed and trimmed before it is stored, because the
+                        // grip is a fraction of the weapon's box and a weapon
+                        // adrift on an empty canvas would be held by the air
+                        // beside it.
+                        WeaponPreparer.prepare(
+                            id = "weapon:${request.slug()}",
+                            name = request.subject.trim(),
+                            kind = request.kind,
+                            bytes = bytes,
+                        )?.let { prepared ->
+                            ai.weapons.save(prepared.weapon, prepared.bytes)
+                            prepared.weapon
+                        }
+                    },
+                    loadWeapons = ai.weapons::all,
+                    loadSheets = { spriteSheets },
+                    fitFor = ai.weaponFits::fitFor,
+                    saveFit = { sheetId, fit ->
+                        ai.weaponFits.save(sheetId, fit)
+                        // The resolver caches rigs, so it has to be rebuilt for
+                        // a corrected fit to reach the world.
+                        spriteRevision++
+                    },
+                    deleteWeapon = { id ->
+                        ai.weapons.delete(id)
+                        if (equippedWeaponId == id) equippedWeaponId = null
+                    },
+                    isProviderConfigured = ai::isConfigured,
+                ),
+            )
+            WeaponForgeScreen(
+                viewModel = weaponViewModel,
+                modifier = modifier,
+                onBack = { destination = Destination.SPRITES },
+                onOpenSettings = { destination = Destination.SETTINGS },
+                onEquip = { id -> equippedWeaponId = id },
+                equippedId = equippedWeaponId,
+                previewFor = { id -> ai.weapons.bitmapFor(id)?.asImageBitmap() },
+                sheetImageFor = { id -> ai.sprites.drawableBitmapFor(id)?.asImageBitmap() },
+            )
+        }
+
+        Destination.MAPPER -> {
+            val mapperViewModel: SpriteMapperViewModel = viewModel(
+                factory = SpriteMapperViewModel.factory(
+                    openProject = ai.spriteProjects::load,
+                    sourcePixels = { atlas ->
+                        ai.spriteProjects.sourceFor(atlas.id)?.let(SpriteAtlasBaker::pixelsOf)
+                    },
+                    startProject = { sheet ->
+                        // The art is copied into a project of its own before
+                        // anything is mapped, so re-cutting a sheet can never
+                        // damage the only copy of the image it was cut from.
+                        val bitmap = ai.sprites.bitmapFor(sheet.id)
+                        val bytes = ai.sprites.bytesFor(sheet.id)
+                        if (bitmap == null || bytes == null) {
+                            null
+                        } else {
+                            SpriteMapper.fromSheet(
+                                sheet = sheet,
+                                imageWidth = bitmap.width,
+                                imageHeight = bitmap.height,
+                            ).also { ai.spriteProjects.save(it, bytes) }
+                        }
+                    },
+                    saveProject = { atlas -> ai.spriteProjects.save(atlas) },
+                    bakeAtlas = { atlas ->
+                        val source = ai.spriteProjects.sourceFor(atlas.id)
+                        val baked = source?.let { SpriteAtlasBaker.bake(atlas, it) }
+                        baked?.let {
+                            // Saved under the atlas's own id, so re-baking a
+                            // mapping replaces that sheet rather than leaving
+                            // the world to choose between two versions of it.
+                            ai.sprites.save(it.sheet, it.bytes)
+                            spriteRevision++
+                            it.sheet
+                        }
+                    },
+                    loadSheets = ai.sprites::all,
+                ),
+            )
+            SpriteMapperScreen(
+                viewModel = mapperViewModel,
+                modifier = modifier,
+                onBack = { destination = Destination.SPRITES },
+                sourceFor = { atlas ->
+                    ai.spriteProjects.sourceFor(atlas.id)?.asImageBitmap()
+                },
             )
         }
 

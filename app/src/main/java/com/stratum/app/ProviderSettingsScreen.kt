@@ -107,8 +107,22 @@ fun ProviderSettingsScreen(
                 onValueChange = { imageModel = it; saved = false },
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Image model") },
-                placeholder = { Text("google/gemini-2.5-flash-image") },
-                supportingText = { Text("Draws sprite sheets.") },
+                placeholder = { Text("meta/muse-image") },
+                // The pose forge hands the model a picture and asks for it
+                // back in a new pose, so the model must accept an image as
+                // input -- a text-to-image model fails on every one of forty
+                // frames. Named here rather than left to be discovered one
+                // generation at a time. Both of these were measured against a
+                // real character: they hold the camera angle, keep the costume
+                // across an edit, and key out cleanly.
+                supportingText = {
+                    Text(
+                        "Draws sprite sheets and poses. It must accept an image as input. " +
+                            "meta/muse-image is the default (square 1600px, ~$0.01 an image, " +
+                            "true green backdrop, ~20s); google/gemini-2.5-flash-image is " +
+                            "smaller, dearer and faster (1024px, ~$0.039, ~9s).",
+                    )
+                },
                 singleLine = true,
             )
             Spacer(Modifier.height(Space.medium))

@@ -45,7 +45,28 @@ data class ImageRequest(
     val height: Int = 512,
     /** Transparent output is non-negotiable for sprite sheets. */
     val requireTransparency: Boolean = true,
+    /**
+     * Images handed to the model along with the prompt.
+     *
+     * This is what turns a generator into an editor, and it is the only
+     * reliable way to get a *character* rather than a series of strangers. Ask
+     * a model for eight poses of a bronze warrior in eight calls and you get
+     * eight different warriors; hand it the warrior each time and ask only for
+     * the pose to change, and it is the same one.
+     */
+    val references: List<ImageReference> = emptyList(),
 )
+
+/** An image sent to the model, rather than one it sent back. */
+data class ImageReference(val bytes: ByteArray, val mimeType: String = "image/png") {
+    // ByteArray compares by identity, which would make two copies of the same
+    // reference unequal and quietly break every test that checks what was sent.
+    override fun equals(other: Any?): Boolean =
+        this === other ||
+            (other is ImageReference && mimeType == other.mimeType && bytes.contentEquals(other.bytes))
+
+    override fun hashCode(): Int = 31 * bytes.contentHashCode() + mimeType.hashCode()
+}
 
 data class GeneratedImage(
     val bytes: ByteArray,
@@ -90,5 +111,29 @@ interface ModelCatalogPort {
 }
 
 /** Raised when a model answers with something that is not usable content. */
-class GenerationException(message: String, cause: Throwable? = null) :
-    IllegalStateException(message, cause)
+/**
+ * A generation that did not produce an image.
+ *
+ * [retryable] is the whole reason this is not a plain exception. A run that
+ * draws forty frames one after another will meet a rate limit — it is not an
+ * edge case, it is what happens when you send forty image requests in a row —
+ * and the difference between waiting two seconds and losing the frame is the
+ * difference between a finished character and a half-finished one. Equally, a
+ * rejected API key will reject all forty, and grinding through the rest to
+ * prove it wastes minutes to learn nothing.
+ *
+ * The adapter knows which it is, because it has the status code. Nothing
+ * downstream can work it out from a sentence, so it is carried rather than
+ * inferred.
+ */
+class GenerationException(
+    message: String,
+    cause: Throwable? = null,
+    val retryable: Boolean = false,
+    /**
+     * True when this will fail identically for every other frame too: a bad
+     * key, no credit, a model that does not exist. The run should stop rather
+     * than reproduce the same failure another thirty-nine times.
+     */
+    val fatal: Boolean = false,
+) : IllegalStateException(message, cause)

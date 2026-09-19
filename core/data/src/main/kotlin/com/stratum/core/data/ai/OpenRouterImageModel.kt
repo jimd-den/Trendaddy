@@ -19,13 +19,16 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
 /**
- * Asks an OpenAI-compatible endpoint for an image.
+ * Asks an image endpoint to draw something, or to redraw something it is given.
  *
- * Providers disagree about how an image comes back even when they agree on the
- * request, so this tries the shapes in the order they actually occur: a base64
- * payload, a URL to fetch, or an image embedded in a chat reply. A sprite sheet
- * is worth the extra attempts -- failing because a provider answered in its own
- * dialect would be a poor reason to lose a generation.
+ * Both go to /images/generations. Editing once had to be posted as a chat turn
+ * with the picture inside it, which was the only shape providers served it in;
+ * the image API now takes reference images directly, and the chat route is not
+ * merely redundant but broken -- a model whose only output is an image has no
+ * chat endpoint to answer on, and answers a chat request with a 404.
+ *
+ * Providers still disagree about how the image comes back, so both shapes that
+ * occur are tried: an inline base64 payload, or a URL to fetch.
  */
 class OpenRouterImageModel(
     private val configProvider: () -> ProviderConfig,
@@ -48,14 +51,30 @@ class OpenRouterImageModel(
             }
 
             val model = request.modelId ?: config.imageModel
+            // One endpoint for both operations. Drawing from nothing and
+            // redrawing something that exists are the same request to the
+            // image API; they differ only by whether references came with it.
+            val editing = request.references.isNotEmpty()
             val endpoint = "${config.baseUrl.trimEnd('/')}/images/generations"
             val payload = moshi.adapter(ImageRequestDto::class.java).toJson(
                 ImageRequestDto(
                     model = model,
                     prompt = request.prompt,
                     n = 1,
-                    size = "${request.width}x${request.height}",
                     response_format = "b64_json",
+                    input_references = request.references
+                        .map { reference ->
+                            val encoded = Base64.encodeToString(reference.bytes, Base64.NO_WRAP)
+                            ImageReferenceDto(
+                                image_url = ImageUrlDto(
+                                    "data:${reference.mimeType};base64,$encoded",
+                                ),
+                            )
+                        }
+                        // Absent rather than empty: a model that does not edit
+                        // refuses the field outright, and a plain generation
+                        // has no business carrying it.
+                        .ifEmpty { null },
                 ),
             )
             // The key lives in a header and is never recorded. Everything else
@@ -90,20 +109,10 @@ class OpenRouterImageModel(
                     // nobody needs to read that, but a failure is short.
                     responseBody = body.take(MAX_RECORDED_BODY)
                     if (!response.isSuccessful) {
-                        throw GenerationException(describeFailure(response.code, body, model))
+                        throw failureFor(response.code, body, model)
                     }
-                    val parsed = moshi.adapter(ImageResponseDto::class.java).fromJson(body)
-                    val first = parsed?.data?.firstOrNull()
-                        ?: throw GenerationException(
-                            "'${'$'}model' replied with no image. It is probably a text model.",
-                        )
-
                     observer.onStage(GenerationStage.DECODING)
-                    val bytes = when {
-                        !first.b64_json.isNullOrBlank() -> decodeBase64(first.b64_json)
-                        !first.url.isNullOrBlank() -> download(first.url)
-                        else -> throw GenerationException("The model's reply contained no image data")
-                    }
+                    val bytes = drawnImage(body, model)
                     observer.onStage(GenerationStage.MEASURING)
                     toGeneratedImage(bytes, request)
                 }
@@ -111,11 +120,18 @@ class OpenRouterImageModel(
 
             observer.onAttempt(
                 GenerationAttempt(
-                    id = "img_${'$'}startedAt",
-                    label = "Image · ${'$'}{request.width}×${'$'}{request.height}",
+                    id = "img_$startedAt",
+                    label = if (editing) {
+                        "Pose edit · ${request.width}×${request.height}"
+                    } else {
+                        "Image · ${request.width}×${request.height}"
+                    },
                     endpoint = endpoint,
                     model = model,
-                    requestBody = payload,
+                    // The reference image is a megabyte of base64 and the
+                    // panel that shows this is for reading. The prompt is the
+                    // part anyone debugging a bad pose needs to see.
+                    requestBody = redactImageData(payload),
                     redactedHeaders = headers,
                     status = status,
                     responseBody = responseBody,
@@ -124,7 +140,46 @@ class OpenRouterImageModel(
                 ),
             )
             observer.onStage(if (result.isSuccess) GenerationStage.DONE else GenerationStage.FAILED)
-            result
+            // A socket that died halfway through is worth another go for the
+            // same reason a 429 is: the request was fine, the moment was not.
+            result.recoverCatching { cause ->
+                throw if (cause is java.io.IOException) {
+                    GenerationException(
+                        cause.message ?: "The connection dropped.",
+                        cause = cause,
+                        retryable = true,
+                    )
+                } else {
+                    cause
+                }
+            }
+        }
+
+    /** The image from an /images/generations reply. */
+    private fun drawnImage(body: String, model: String): ByteArray {
+        val parsed = moshi.adapter(ImageResponseDto::class.java).fromJson(body)
+        val first = parsed?.data?.firstOrNull()
+            ?: throw GenerationException(
+                "'$model' replied with no image. It is probably a text model.",
+            )
+        return when {
+            !first.b64_json.isNullOrBlank() -> decodeBase64(first.b64_json)
+            !first.url.isNullOrBlank() -> download(first.url)
+            else -> throw GenerationException("The model's reply contained no image data")
+        }
+    }
+
+    /**
+     * Replaces embedded image payloads with their size.
+     *
+     * A recorded request is for a person to read. One that is 99% base64 is not
+     * readable, and storing several of them per character is a real amount of
+     * memory held for no purpose.
+     */
+    private fun redactImageData(payload: String): String =
+        DATA_URI.replace(payload) { match ->
+            val prefix = match.value.substringBefore("base64,") + "base64,"
+            "$prefix<${match.value.length / 1024}KB of image omitted>"
         }
 
     private fun decodeBase64(encoded: String): ByteArray {
@@ -163,19 +218,46 @@ class OpenRouterImageModel(
         )
     }
 
-    private fun describeFailure(code: Int, body: String, model: String): String = when (code) {
-        400 -> "'$model' rejected the request. It may not be an image model."
-        401, 403 -> "The API key was rejected. Check it in settings."
-        402 -> "The provider reports no remaining credit for this key."
-        404 -> "'$model' is not available on this provider."
-        429 -> "The provider is rate limiting. Wait a moment and try again."
-        in 500..599 -> "The provider is having trouble (HTTP $code). Try again shortly."
-        else -> "The provider refused the request (HTTP $code): ${body.take(200)}"
+    /**
+     * The status code turned into something a run can act on.
+     *
+     * Three outcomes, not one. A rate limit or a provider wobble is worth
+     * waiting out, because the next attempt usually works. A rejected key or a
+     * model that does not exist will do exactly the same thing to every
+     * remaining frame, so a long run should stop rather than spend four minutes
+     * proving it. Everything else is this frame's problem alone: skip it, keep
+     * going, report it at the end.
+     */
+    private fun failureFor(code: Int, body: String, model: String): GenerationException = when (code) {
+        400 -> GenerationException("'$model' rejected the request. It may not be an image model.")
+        401, 403 -> GenerationException(
+            "The API key was rejected. Check it in settings.",
+            fatal = true,
+        )
+        402 -> GenerationException(
+            "The provider reports no remaining credit for this key.",
+            fatal = true,
+        )
+        404 -> GenerationException("'$model' is not available on this provider.", fatal = true)
+        408, 429 -> GenerationException(
+            "The provider is rate limiting. Waiting before the next attempt.",
+            retryable = true,
+        )
+        in 500..599 -> GenerationException(
+            "The provider is having trouble (HTTP $code).",
+            retryable = true,
+        )
+        else -> GenerationException(
+            "The provider refused the request (HTTP $code): ${body.take(200)}",
+        )
     }
 
     private companion object {
         /** Enough to read an error; far less than a base64 image. */
         const val MAX_RECORDED_BODY = 4000
+
+        /** A data URI wherever it turns up: in a reply, or in our own request. */
+        val DATA_URI = Regex("data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+")
         val JSON_MEDIA_TYPE = "application/json".toMediaType()
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
@@ -187,13 +269,38 @@ class OpenRouterImageModel(
     }
 }
 
+/**
+ * No `size`.
+ *
+ * It looks like the obvious field to set and it is a trap. Providers round the
+ * requested size to whatever they actually produce, so it was never load
+ * bearing -- the returned image is measured rather than trusted, precisely
+ * because of that. But a size a provider will not accept is not rounded, it is
+ * refused: 512x512 comes back as a flat HTTP 400 from Google, which turns "an
+ * image of a slightly different size" into "no image at all". Asking for
+ * nothing and measuring what arrives cannot fail that way.
+ */
 @JsonClass(generateAdapter = true)
 internal data class ImageRequestDto(
     val model: String,
     val prompt: String,
     val n: Int,
-    val size: String,
     val response_format: String,
+    /** The pictures to work from. Null, not empty, when drawing from nothing. */
+    val input_references: List<ImageReferenceDto>? = null,
+)
+
+/**
+ * A picture handed to the model to work from.
+ *
+ * The `type` discriminator is required and has exactly one accepted value, so
+ * it is not a parameter -- a caller cannot get it right by choosing, only
+ * wrong by choosing.
+ */
+@JsonClass(generateAdapter = true)
+internal data class ImageReferenceDto(
+    val image_url: ImageUrlDto,
+    val type: String = "image_url",
 )
 
 @JsonClass(generateAdapter = true)
@@ -201,3 +308,6 @@ internal data class ImageResponseDto(val data: List<ImageDatumDto>?)
 
 @JsonClass(generateAdapter = true)
 internal data class ImageDatumDto(val b64_json: String?, val url: String?)
+
+@JsonClass(generateAdapter = true)
+internal data class ImageUrlDto(val url: String)

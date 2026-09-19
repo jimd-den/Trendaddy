@@ -40,7 +40,9 @@ import com.stratum.core.designsystem.component.StratumPanel
 import com.stratum.core.designsystem.component.StratumWell
 import com.stratum.core.designsystem.theme.Space
 import com.stratum.core.domain.ai.GenerationStage
+import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.sprite.KeyStrategy
+import com.stratum.core.domain.sprite.SpriteValidation
 import com.stratum.core.designsystem.theme.safeContent
 import com.stratum.core.designsystem.theme.StratumTheme
 import com.stratum.core.domain.sprite.SpriteSheet
@@ -60,6 +62,12 @@ fun SpriteForgeScreen(
     onOpenSettings: () -> Unit = {},
     onToggleDetails: () -> Unit = {},
     previewFor: (String) -> ImageBitmap? = { null },
+    /** Opens the frame mapper, for fixing a sheet rather than regenerating it. */
+    onMapFrames: () -> Unit = {},
+    /** Opens the pose forge, which builds a character from one drawing. */
+    onPoseForge: () -> Unit = {},
+    /** Opens the weapon forge, which draws weapons nobody owns yet. */
+    onWeaponForge: () -> Unit = {},
 ) {
     // Re-read the provider on every visit. The view model outlives this screen,
     // so without this a key saved in settings a moment ago is still reported as
@@ -74,12 +82,16 @@ fun SpriteForgeScreen(
         onStyleChange = viewModel::updateStyle,
         onStylePreset = viewModel::selectStyle,
         onTargetChange = viewModel::selectTarget,
+        onActionChange = viewModel::selectAction,
         onGenerate = viewModel::generate,
         onDelete = viewModel::delete,
         onBack = onBack,
         onOpenSettings = onOpenSettings,
         onToggleDetails = viewModel::toggleDetails,
         previewFor = previewFor,
+        onMapFrames = onMapFrames,
+        onPoseForge = onPoseForge,
+        onWeaponForge = onWeaponForge,
     )
 }
 
@@ -91,12 +103,16 @@ fun SpriteForgeContent(
     onStyleChange: (String) -> Unit = {},
     onStylePreset: (SpriteStyle) -> Unit = {},
     onTargetChange: (SpriteTarget) -> Unit = {},
+    onActionChange: (AnimationState) -> Unit = {},
     onGenerate: () -> Unit = {},
     onDelete: (String) -> Unit = {},
     onBack: () -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onToggleDetails: () -> Unit = {},
     previewFor: (String) -> ImageBitmap? = { null },
+    onMapFrames: () -> Unit = {},
+    onPoseForge: () -> Unit = {},
+    onWeaponForge: () -> Unit = {},
 ) {
     val colors = StratumTheme.colors
 
@@ -125,16 +141,126 @@ fun SpriteForgeContent(
             color = colors.inkMuted,
         )
 
+        Spacer(Modifier.height(Space.medium))
+
+        // The other way to make a character, offered before the prompt field
+        // rather than after it: asking one model for a whole animated sheet is
+        // the approach with the worst odds on this screen, and someone who
+        // wants consistent animation should hear about the one that works
+        // before they spend a generation finding out.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Want the same character across every frame? Draw it once and pose it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.inkMuted,
+                modifier = Modifier.weight(1f),
+            )
+            StratumAction(
+                label = "Pose forge",
+                onClick = onPoseForge,
+                emphasis = ActionEmphasis.SECONDARY,
+            )
+        }
+
+        Spacer(Modifier.height(Space.medium))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Weapons are drawn separately and attached at the hand, so one sword " +
+                    "serves every character.",
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.inkMuted,
+                modifier = Modifier.weight(1f),
+            )
+            StratumAction(
+                label = "Weapons",
+                onClick = onWeaponForge,
+                emphasis = ActionEmphasis.SECONDARY,
+            )
+        }
+
+        Spacer(Modifier.height(Space.medium))
+
+        // Offered here rather than buried in a menu, because this is the screen
+        // where a sheet turns out wrong. A model will draw good art on a grid
+        // nobody asked for, and regenerating rolls the dice again; mapping the
+        // frames by hand fixes the one that already came back.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Cut wrong, or missing an animation? Map the frames by hand.",
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.inkMuted,
+                modifier = Modifier.weight(1f),
+            )
+            StratumAction(
+                label = "Map frames",
+                onClick = onMapFrames,
+                emphasis = ActionEmphasis.SECONDARY,
+            )
+        }
+
         Spacer(Modifier.height(Space.large))
 
         StratumPanel(modifier = Modifier.fillMaxWidth()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(Space.small)) {
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(Space.small),
+            ) {
                 SpriteTarget.entries.forEach { target ->
                     StratumChip(
                         label = target.label,
                         selected = state.target == target,
                         onClick = { onTargetChange(target) },
                     )
+                }
+            }
+
+            // A smaller ask is a better ask. Said plainly, because the default
+            // is the largest one and a player has no way to know that asking
+            // for less is how you get art that is worth keeping.
+            Spacer(Modifier.height(Space.small))
+            Text(
+                text = when (state.target) {
+                    SpriteTarget.HERO ->
+                        "Seven animations in one image. The most to go wrong, and the most " +
+                            "to keep when it does not."
+                    SpriteTarget.MONSTER -> "Four animations in one image."
+                    SpriteTarget.ACTION ->
+                        "Six frames of one action. Much likelier to come back usable than a " +
+                            "full sheet, and the frame mapper turns it into a clip."
+                    SpriteTarget.POSE ->
+                        "One drawing. The renderer will bob, flinch and fade it, which is " +
+                            "enough for a prop or a first look at a character."
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkMuted,
+            )
+
+            if (state.target.usesAction) {
+                Spacer(Modifier.height(Space.small))
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(Space.small),
+                ) {
+                    AnimationState.entries.forEach { action ->
+                        StratumChip(
+                            label = SpriteValidation.name(action),
+                            selected = state.action == action,
+                            onClick = { onActionChange(action) },
+                        )
+                    }
                 }
             }
 
@@ -253,6 +379,7 @@ fun SpriteForgeContent(
                 KeyStrategy.CHECKERBOARD ->
                     "The model drew a checkerboard instead of being transparent. Removed."
                 KeyStrategy.SOLID -> "A solid background was removed."
+                KeyStrategy.CHROMA -> "The chroma background was removed."
                 KeyStrategy.ALREADY_TRANSPARENT -> null
                 KeyStrategy.NONE -> "No background could be identified; the sheet was kept as drawn."
             }

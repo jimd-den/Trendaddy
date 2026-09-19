@@ -15,13 +15,18 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import com.stratum.core.domain.actor.EnemyInstance
 import com.stratum.core.domain.sprite.AnimationPlayback
+import com.stratum.core.domain.sprite.ProceduralMotion
 import com.stratum.core.domain.sprite.SpriteFacing
 import com.stratum.core.domain.sprite.SpriteSheet
+import com.stratum.core.domain.sprite.WeaponLayer
+import com.stratum.core.domain.sprite.WeaponRig
+import com.stratum.core.domain.sprite.WeaponSprite
 import com.stratum.core.domain.world.BlockPos
 import com.stratum.core.domain.world.Direction
 import com.stratum.core.domain.world.Chunk
@@ -416,35 +421,36 @@ private fun DrawScope.drawSprite(
     flash: Float,
 ) {
     val sheet = sprite.sheet
+    val clip = sheet.clipOrFallback(playback.state)
     val frame = sheet.frameFor(playback.frameIn(sheet), facing)
     val rect = sheet.frameRect(frame)
 
-    // Drawn a little larger than a block so a character reads against terrain,
-    // and anchored at the feet rather than the centre so a tall sprite grows
-    // upward instead of sinking into the ground.
-    val drawWidth = projection.tileWidth * projection.zoom * SPRITE_SCALE
-    val drawHeight = drawWidth * (rect.height.toFloat() / rect.width.coerceAtLeast(1))
-    val left = (x - drawWidth / 2f).toInt()
-    val top = (y - drawHeight + projection.tileHeight * projection.zoom * 0.25f).toInt()
+    // Drawn a little larger than a block so a character reads against terrain.
+    val baseWidth = projection.tileWidth * projection.zoom * SPRITE_SCALE
+    val baseHeight = baseWidth * (rect.height.toFloat() / rect.width.coerceAtLeast(1))
 
-    // A generated sheet reliably holds one facing, not four. Mirroring buys the
-    // other side for nothing and reads correctly at this camera angle, which is
-    // more dependable than asking a model for four consistent angles.
-    if (facing.mirrored) {
-        withTransform({
-            scale(scaleX = -1f, scaleY = 1f, pivot = Offset(x, top + drawHeight / 2f))
-        }) {
-            drawImage(
-                image = sprite.image,
-                srcOffset = IntOffset(rect.left, rect.top),
-                srcSize = IntSize(rect.width, rect.height),
-                dstOffset = IntOffset(left, top),
-                dstSize = IntSize(drawWidth.toInt(), drawHeight.toInt()),
-                filterQuality = FilterQuality.None,
-                alpha = 1f,
-            )
-        }
-    } else {
+    // Motion the art does not supply. A clip playing frames drawn for another
+    // state, or a still held as an animation, gets the difference made up here;
+    // a real animation is left alone, because a drawn attack does not need a
+    // procedural lunge fighting it.
+    val motion = ProceduralMotion.forFrame(
+        state = playback.state,
+        elapsedMs = playback.elapsedMs,
+        clipDurationMs = clip?.durationMs ?: 0,
+        frameCount = clip?.frameCount ?: 1,
+        standsIn = clip == null || clip.state != playback.state || clip.standsInFor != null,
+    )
+
+    val drawWidth = baseWidth * motion.scaleX
+    val drawHeight = baseHeight * motion.scaleY
+    // Anchored at the feet rather than the centre, so a tall sprite grows
+    // upward instead of sinking into the ground -- and so a body that sags as
+    // it dies keeps its contact with the floor while it does.
+    val groundY = y + projection.tileHeight * projection.zoom * 0.25f
+    val left = (x - drawWidth / 2f + motion.offsetX * baseWidth).toInt()
+    val top = (groundY - drawHeight + motion.offsetY * baseHeight).toInt()
+
+    val blit: (Float, ColorFilter?) -> Unit = { alpha, tint ->
         drawImage(
             image = sprite.image,
             srcOffset = IntOffset(rect.left, rect.top),
@@ -452,21 +458,73 @@ private fun DrawScope.drawSprite(
             dstOffset = IntOffset(left, top),
             dstSize = IntSize(drawWidth.toInt(), drawHeight.toInt()),
             filterQuality = FilterQuality.None,
-            alpha = 1f,
+            alpha = alpha,
+            colorFilter = tint,
         )
     }
 
-    if (flash > 0f) {
-        drawImage(
-            image = sprite.image,
-            srcOffset = IntOffset(rect.left, rect.top),
-            srcSize = IntSize(rect.width, rect.height),
-            dstOffset = IntOffset(left, top),
-            dstSize = IntSize(drawWidth.toInt(), drawHeight.toInt()),
-            filterQuality = FilterQuality.None,
-            alpha = flash * 0.75f,
-            colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White),
-        )
+    val weapon = sprite.weapon
+    val anchor = weapon?.rig?.anchorFor(frame)
+    val blitWeapon: (Float) -> Unit = { alpha ->
+        if (weapon != null && anchor != null) {
+            // The weapon is sized against the character rather than against its
+            // own drawing, so a dagger and a spear read as a dagger and a spear
+            // whatever canvases they happened to be generated on.
+            val height = drawHeight * weapon.sprite.kind.reach * anchor.scale
+            val width = height *
+                (weapon.image.width.toFloat() / weapon.image.height.coerceAtLeast(1))
+            val handX = left + anchor.xFraction * drawWidth
+            val handY = top + anchor.yFraction * drawHeight
+
+            // Rotated about the grip, not about the middle of the drawing: a
+            // sword turns in the hand, and pivoting anywhere else swings the
+            // hilt out of the fist on every frame of an attack.
+            withTransform({ rotate(anchor.rotationDegrees, Offset(handX, handY)) }) {
+                drawImage(
+                    image = weapon.image,
+                    dstOffset = IntOffset(
+                        (handX - weapon.sprite.gripX * width).toInt(),
+                        (handY - weapon.sprite.gripY * height).toInt(),
+                    ),
+                    dstSize = IntSize(width.toInt().coerceAtLeast(1), height.toInt().coerceAtLeast(1)),
+                    filterQuality = FilterQuality.None,
+                    alpha = alpha,
+                )
+            }
+        }
+    }
+
+    // Order is the whole difference between a weapon that is held and one that
+    // is stuck on. A wind-up goes behind the shoulder and a strike comes across
+    // the front; getting it backwards is instantly legible as wrong even to
+    // someone who could not say why.
+    val paint: () -> Unit = {
+        if (anchor?.layer == WeaponLayer.BEHIND) blitWeapon(motion.alpha)
+        blit(motion.alpha, null)
+        if (anchor?.layer == WeaponLayer.IN_FRONT) blitWeapon(motion.alpha)
+        if (flash > 0f) blit(flash * 0.75f * motion.alpha, ColorFilter.tint(Color.White))
+    }
+
+    // A generated sheet reliably holds one facing, not four. Mirroring buys the
+    // other side for nothing and reads correctly at this camera angle, which is
+    // more dependable than asking a model for four consistent angles. Art that
+    // says not to -- anything with a readable asymmetry on it -- keeps its one
+    // drawn angle in every direction instead.
+    //
+    // The mirror is taken about the actor's own position, which is also what
+    // turns the embellishment's forward offset into a real forward: a lunge
+    // reflects along with the body it belongs to.
+    val mirrored = facing.mirrored && sheet.mirrorsFacings
+    if (mirrored) {
+        // The weapon is painted inside the mirror with the body, so a character
+        // facing the other way holds it in the other hand for free.
+        withTransform({
+            scale(scaleX = -1f, scaleY = 1f, pivot = Offset(x, top + drawHeight / 2f))
+        }) {
+            paint()
+        }
+    } else {
+        paint()
     }
 }
 
@@ -984,4 +1042,23 @@ sealed interface SpriteKey {
 }
 
 /** A sheet paired with its decoded pixels, ready to draw. */
-data class DrawableSprite(val sheet: SpriteSheet, val image: ImageBitmap)
+data class DrawableSprite(
+    val sheet: SpriteSheet,
+    val image: ImageBitmap,
+    /** What this actor is holding, if anything. Drawn separately and attached. */
+    val weapon: DrawableWeapon? = null,
+)
+
+/**
+ * A weapon and where it sits across a sheet.
+ *
+ * The rig travels with the weapon rather than with the sheet because it is
+ * about *this* actor holding *this* weapon: the same sword rigged onto a
+ * six-frame attack and a four-frame one needs different anchors, and the sheet
+ * has no opinion about whether anything is being held at all.
+ */
+data class DrawableWeapon(
+    val sprite: WeaponSprite,
+    val image: ImageBitmap,
+    val rig: WeaponRig,
+)

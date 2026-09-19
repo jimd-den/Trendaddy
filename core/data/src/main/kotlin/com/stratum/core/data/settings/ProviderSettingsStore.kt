@@ -45,7 +45,7 @@ class ProviderSettingsStore(context: Context) {
         const val KEY_IMAGE_MODEL = "image_model"
         const val KEY_BASE_URL = "base_url"
         const val DEFAULT_MODEL = "google/gemini-2.0-flash-exp:free"
-        const val DEFAULT_IMAGE_MODEL = "google/gemini-2.5-flash-image"
+        const val DEFAULT_IMAGE_MODEL = "meta/muse-image"
         const val DEFAULT_BASE_URL = "https://openrouter.ai/api/v1/"
     }
 }

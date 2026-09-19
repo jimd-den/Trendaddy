@@ -44,6 +44,93 @@ class GenerateSpriteSheetUseCaseTest {
     }
 
     @Test
+    fun `a single action block is one contiguous clip across the whole grid`() = runTest {
+        val model = FakeImageModel(Result.success(image(1024, 1024)))
+        val result = GenerateSpriteSheetUseCase(model)(
+            SpriteSheetRequest(
+                subject = "a bronze-masked warrior",
+                namespace = "action",
+                layout = SheetLayout.action(AnimationState.WALK),
+                variant = "WALK",
+            ),
+        ).getOrThrow()
+
+        assertEquals(3, result.sheet.columns)
+        assertEquals(2, result.sheet.rows)
+        val walk = result.sheet.clip(AnimationState.WALK)
+        assertEquals(6, walk?.frameCount)
+        assertEquals(0, walk?.firstFrame)
+        // Reading across the wrap is what makes a two-row block one animation.
+        assertEquals(1, walk?.frameAt(walk.frameDurationMs.toLong()))
+        assertEquals(3, walk?.frameAt(3L * walk.frameDurationMs))
+        assertTrue(result.sheet.isCoherent)
+    }
+
+    @Test
+    fun `two actions of the same subject do not overwrite each other`() = runTest {
+        val model = FakeImageModel(Result.success(image(1024, 1024)))
+        val use = GenerateSpriteSheetUseCase(model)
+
+        val walk = use(
+            SpriteSheetRequest(
+                subject = "a bronze-masked warrior",
+                namespace = "action",
+                layout = SheetLayout.action(AnimationState.WALK),
+                variant = "WALK",
+            ),
+        ).getOrThrow()
+        val attack = use(
+            SpriteSheetRequest(
+                subject = "a bronze-masked warrior",
+                namespace = "action",
+                layout = SheetLayout.action(AnimationState.ATTACK),
+                variant = "ATTACK",
+            ),
+        ).getOrThrow()
+
+        assertTrue(walk.sheet.id != attack.sheet.id, "the second generation replaced the first")
+    }
+
+    @Test
+    fun `an action block is asked for as one action, not as rows`() = runTest {
+        val model = FakeImageModel(Result.success(image(1024, 1024)))
+        GenerateSpriteSheetUseCase(model)(
+            SpriteSheetRequest(
+                subject = "a bronze-masked warrior",
+                layout = SheetLayout.action(AnimationState.WALK),
+            ),
+        ).getOrThrow()
+
+        val prompt = model.lastRequest?.prompt.orEmpty()
+        assertTrue("All 6 cells show one action" in prompt, prompt)
+        // Saying "row one" would tell the model the other row is something else.
+        assertTrue("Row 1:" !in prompt, prompt)
+    }
+
+    @Test
+    fun `a single pose is not asked for as a grid`() = runTest {
+        val model = FakeImageModel(Result.success(image(512, 512)))
+        val result = GenerateSpriteSheetUseCase(model)(
+            SpriteSheetRequest(subject = "a bronze mask", layout = SheetLayout.pose()),
+        ).getOrThrow()
+
+        assertEquals(1, result.sheet.columns)
+        assertEquals(1, result.sheet.rows)
+        assertEquals(512, result.sheet.frameWidth)
+
+        val prompt = model.lastRequest?.prompt.orEmpty()
+        // A model told about cells draws cell borders; one told "one small
+        // picture" draws a small picture in the corner of an empty canvas.
+        assertTrue("arranged in a grid" !in prompt, prompt)
+        assertTrue("cell" !in prompt.lowercase(), prompt)
+        assertTrue("filling most of the canvas" in prompt, prompt)
+        // Both failures are still named outright rather than implied, which is
+        // what the sheet prompt learned the hard way about the checkerboard.
+        assertTrue("No grid" in prompt, prompt)
+        assertTrue("checkerboard" in prompt, prompt)
+    }
+
+    @Test
     fun `frame size comes from the image that arrived, not the one requested`() = runTest {
         // Models round to their own supported sizes. Cutting on the requested
         // dimensions would shear every frame.
