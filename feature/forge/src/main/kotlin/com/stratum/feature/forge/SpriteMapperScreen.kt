@@ -1,6 +1,7 @@
 package com.stratum.feature.forge
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -27,17 +28,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -61,6 +65,7 @@ import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.sprite.FacingLayout
 import com.stratum.core.domain.sprite.FrameRef
 import com.stratum.core.domain.sprite.SliceSpec
+import com.stratum.core.domain.sprite.SourceRect
 import com.stratum.core.domain.sprite.SpriteAtlas
 import com.stratum.core.domain.sprite.SpriteSheet
 import com.stratum.core.domain.sprite.SpriteValidation
@@ -123,6 +128,8 @@ fun SpriteMapperScreen(
                     )
                 }
                 is SpriteMapperAction.SetCellSize -> viewModel.setCellSize(action.pixels)
+                is SpriteMapperAction.SetSquareCells -> viewModel.setSquareCells(action.on)
+                is SpriteMapperAction.SetGridFromBox -> viewModel.setGridFromBox(action.rect)
                 SpriteMapperAction.TrimToContent -> viewModel.trimToContent()
                 is SpriteMapperAction.ToggleFrame -> viewModel.toggleFrame(action.frameId)
                 is SpriteMapperAction.FlipFrame -> viewModel.flipFrame(action.frameId)
@@ -217,10 +224,10 @@ fun SpriteMapperContent(
         Notice(state.message, state.error, onAction)
 
         Spacer(Modifier.height(Space.medium))
-        SourcePanel(atlas, state.slice, source, onAction)
+        SourcePanel(atlas, state.slice, state.squareCells, source, onAction)
 
         Spacer(Modifier.height(Space.medium))
-        GridPanel(state.slice, onAction)
+        GridPanel(state.slice, state.squareCells, onAction)
 
         Spacer(Modifier.height(Space.medium))
         ContactSheet(atlas, state, source, onAction)
@@ -304,10 +311,17 @@ private fun SheetPicker(sheets: List<SpriteSheet>, onAction: (SpriteMapperAction
 private fun SourcePanel(
     atlas: SpriteAtlas,
     slice: SliceSpec?,
+    squareCells: Boolean,
     source: ImageBitmap?,
     onAction: (SpriteMapperAction) -> Unit,
 ) {
     val colors = StratumTheme.colors
+
+    // The box being drawn, in source pixels. Held here rather than in the
+    // view model because a half-finished drag is not a grid -- re-cutting the
+    // sheet on every frame of a drag would be forty reslices and forty undo
+    // entries for one gesture.
+    var drawnBox by remember(atlas.id) { mutableStateOf<SourceRect?>(null) }
 
     StratumSection(
         title = "Source",
@@ -334,7 +348,54 @@ private fun SourcePanel(
                         .aspectRatio(
                             atlas.sourceWidth.toFloat() /
                                 atlas.sourceHeight.coerceAtLeast(1).toFloat(),
-                        ),
+                        )
+                        .pointerInput(atlas.id, atlas.sourceWidth, squareCells) {
+                            // Source pixels per screen pixel. Everything the
+                            // drag reports is in screen space and every number
+                            // the grid is made of is in source space, and
+                            // mixing the two is how an editor ends up cutting
+                            // a sheet at a size nobody asked for.
+                            val perPixel =
+                                atlas.sourceWidth.toFloat() / size.width.coerceAtLeast(1)
+                            var start = Offset.Zero
+                            var current = Offset.Zero
+
+                            fun boxOf(): SourceRect {
+                                val left = minOf(start.x, current.x) * perPixel
+                                val top = minOf(start.y, current.y) * perPixel
+                                val right = maxOf(start.x, current.x) * perPixel
+                                val bottom = maxOf(start.y, current.y) * perPixel
+                                return SourceRect(
+                                    left = left.toInt().coerceAtLeast(0),
+                                    top = top.toInt().coerceAtLeast(0),
+                                    width = (right - left).toInt().coerceAtLeast(1),
+                                    height = (bottom - top).toInt().coerceAtLeast(1),
+                                )
+                            }
+
+                            // After a long press, not immediately. The panel
+                            // scrolls, the image is most of it, and a canvas
+                            // that swallows every drag is a screen that cannot
+                            // be scrolled past. Holding first says "I mean the
+                            // sheet, not the page".
+                            detectDragGesturesAfterLongPress(
+                                onDragStart = {
+                                    start = it
+                                    current = it
+                                    drawnBox = null
+                                },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    current = change.position
+                                    drawnBox = boxOf()
+                                },
+                                onDragEnd = {
+                                    drawnBox?.let { onAction(SpriteMapperAction.SetGridFromBox(it)) }
+                                    drawnBox = null
+                                },
+                                onDragCancel = { drawnBox = null },
+                            )
+                        },
                 ) {
                     val scale = size.width / atlas.sourceWidth.coerceAtLeast(1)
                     drawImage(
@@ -346,6 +407,20 @@ private fun SourcePanel(
                         filterQuality = FilterQuality.None,
                     )
                     if (slice != null) drawGrid(slice, scale, colors.accent)
+                    drawnBox?.let { box ->
+                        // Squared as it is drawn, not on release: a box that
+                        // snaps to a different shape the moment you lift your
+                        // finger is a box you cannot aim.
+                        val side = minOf(box.width, box.height)
+                        val w = if (squareCells) side else box.width
+                        val h = if (squareCells) side else box.height
+                        drawRect(
+                            color = colors.accent,
+                            topLeft = Offset(box.left * scale, box.top * scale),
+                            size = Size(w * scale, h * scale),
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(2f),
+                        )
+                    }
                 }
             }
         }
@@ -374,7 +449,11 @@ private fun DrawScope.drawGrid(slice: SliceSpec, scale: Float, tint: Color) {
  * ever fix.
  */
 @Composable
-private fun GridPanel(slice: SliceSpec?, onAction: (SpriteMapperAction) -> Unit) {
+private fun GridPanel(
+    slice: SliceSpec?,
+    squareCells: Boolean,
+    onAction: (SpriteMapperAction) -> Unit,
+) {
     if (slice == null) return
 
     StratumSection(
@@ -388,6 +467,28 @@ private fun GridPanel(slice: SliceSpec?, onAction: (SpriteMapperAction) -> Unit)
             )
         },
     ) {
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(Space.small),
+        ) {
+            Text(
+                text = "Shape",
+                style = MaterialTheme.typography.labelSmall,
+                color = StratumTheme.colors.inkMuted,
+            )
+            StratumChip(
+                label = "Square",
+                selected = squareCells,
+                onClick = { onAction(SpriteMapperAction.SetSquareCells(true)) },
+            )
+            StratumChip(
+                label = "Free",
+                selected = !squareCells,
+                onClick = { onAction(SpriteMapperAction.SetSquareCells(false)) },
+            )
+        }
+
+        Spacer(Modifier.height(Space.small))
         // Offered before the column count, because a person who knows their
         // cell size knows it exactly, and a person counting columns on a
         // twenty-one row sheet is guessing.
@@ -410,6 +511,15 @@ private fun GridPanel(slice: SliceSpec?, onAction: (SpriteMapperAction) -> Unit)
         }
 
         Spacer(Modifier.height(Space.small))
+        // The chips cover the sizes art is usually sold in; this covers the
+        // sizes it is actually drawn at. A sheet of 96 pixel cells has no chip
+        // and is no less real, and without this the only way to reach it is to
+        // guess a column count that happens to divide out.
+        if (squareCells) {
+            Stepper("Square size", slice.cellWidth, step = 2) {
+                onAction(SpriteMapperAction.SetCellSize(it))
+            }
+        }
         Stepper("Columns", slice.columns) { onAction(SpriteMapperAction.SetGrid(columns = it)) }
         Stepper("Rows", slice.rows) { onAction(SpriteMapperAction.SetGrid(rows = it)) }
         Stepper("Margin across", slice.offsetX, step = 2) {
@@ -427,9 +537,11 @@ private fun GridPanel(slice: SliceSpec?, onAction: (SpriteMapperAction) -> Unit)
 
         Spacer(Modifier.height(Space.small))
         Text(
-            text = "Trim shrinks every cell to what is drawn in it and switches the blank ones " +
-                "off. It is also what makes the feet line up when the frames are packed. " +
-                "For art no grid describes, open a frame and size it by hand.",
+            text = "Press and hold on the sheet above, then drag a box around one frame to " +
+                "set the grid by eye: where the box starts is where the grid starts, and how " +
+                "big it is is how big a cell is. Trim shrinks every cell to what is drawn in it and switches the " +
+                "blank ones off. It is also what makes the feet line up when the frames are " +
+                "packed. For art no grid describes, open a frame and size it by hand.",
             style = MaterialTheme.typography.labelSmall,
             color = StratumTheme.colors.inkMuted,
         )

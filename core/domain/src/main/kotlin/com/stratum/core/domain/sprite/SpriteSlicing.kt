@@ -29,6 +29,9 @@ data class SliceSpec(
 
     val cells: Int get() = columns * rows
 
+    /** Whether the cells are square, which is what almost every sheet wants. */
+    val isSquare: Boolean get() = cellWidth == cellHeight
+
     val grid: SheetGrid get() = SheetGrid(columns, rows)
 
     /** How much image this slice covers, for checking it against the picture. */
@@ -74,6 +77,47 @@ data class SliceSpec(
                 offsetY = offsetY,
                 cellWidth = cellWidth,
                 cellHeight = cellHeight,
+                gutterX = gutterX,
+                gutterY = gutterY,
+            )
+        }
+
+        /**
+         * The same grid, cut into square cells.
+         *
+         * Dividing an image by its column and row counts only gives square
+         * cells when the image's proportions happen to match the grid's, and
+         * a sheet is very often a few pixels off that -- a border the model
+         * drew, a row that was padded, a width rounded to a multiple of eight.
+         * The cells then come out a little oblong, every frame is stretched by
+         * the ratio, and the error is small enough to look like bad art rather
+         * than a bad grid.
+         *
+         * The cell takes the *smaller* of the two divisions. The larger would
+         * run the last column or row off the edge of the image, which trades a
+         * subtle error for a frame that is half missing.
+         */
+        fun squareFitting(
+            grid: SheetGrid,
+            imageWidth: Int,
+            imageHeight: Int,
+            offsetX: Int = 0,
+            offsetY: Int = 0,
+            gutterX: Int = 0,
+            gutterY: Int = 0,
+        ): SliceSpec? {
+            if (grid.columns <= 0 || grid.rows <= 0) return null
+            val usableWidth = imageWidth - offsetX - (grid.columns - 1) * gutterX
+            val usableHeight = imageHeight - offsetY - (grid.rows - 1) * gutterY
+            val cell = minOf(usableWidth / grid.columns, usableHeight / grid.rows)
+            if (cell <= 0) return null
+            return SliceSpec(
+                columns = grid.columns,
+                rows = grid.rows,
+                offsetX = offsetX,
+                offsetY = offsetY,
+                cellWidth = cell,
+                cellHeight = cell,
                 gutterX = gutterX,
                 gutterY = gutterY,
             )

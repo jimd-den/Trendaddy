@@ -156,6 +156,73 @@ class SpriteSlicingTest {
     }
 
     @Test
+    fun `square fitting takes the smaller division so the last cell stays on the image`() {
+        // The same 400x200 image the even fit cuts into 100x50 oblongs.
+        val spec = assertNotNull(SliceSpec.squareFitting(SheetGrid(4, 4), 400, 200))
+        assertTrue(spec.isSquare)
+        assertEquals(50, spec.cellWidth)
+        assertEquals(50, spec.cellHeight)
+        // Taking the larger division would have been 100, and the fourth row
+        // would have started at 300 on an image 200 tall.
+        assertTrue(
+            spec.coveredHeight <= 200,
+            "the grid runs ${spec.coveredHeight} down an image 200 tall",
+        )
+        assertTrue(spec.coveredWidth <= 400)
+    }
+
+    @Test
+    fun `square fitting keeps a sheet that is already square exactly as it is`() {
+        // A sheet the pose forge packed: 4x3 cells of 192.
+        val spec = assertNotNull(SliceSpec.squareFitting(SheetGrid(4, 3), 768, 576))
+        assertEquals(192, spec.cellWidth)
+        assertEquals(192, spec.cellHeight)
+        assertEquals(768, spec.coveredWidth, "the grid no longer covers the whole sheet")
+        assertEquals(576, spec.coveredHeight)
+    }
+
+    @Test
+    fun `square fitting respects the margin and the gap it is given`() {
+        val spec = assertNotNull(
+            SliceSpec.squareFitting(
+                SheetGrid(3, 3), 200, 200, offsetX = 8, offsetY = 8, gutterX = 4, gutterY = 4,
+            ),
+        )
+        assertTrue(spec.isSquare)
+        // 200 less an 8px margin and two 4px gaps is 184, three ways: 61.
+        assertEquals(61, spec.cellWidth)
+        assertTrue(spec.coveredWidth <= 200 && spec.coveredHeight <= 200)
+        assertEquals(SourceRect(8, 8, 61, 61), spec.rectAt(0, 0))
+        // Second cell clears the first by the gap, not by nothing.
+        assertEquals(8 + 61 + 4, spec.rectAt(1, 0).left)
+    }
+
+    @Test
+    fun `a grid drawn as one cell describes the whole sheet`() {
+        // What dragging a box around the top-left frame of a 4x3 sheet of 192s
+        // has to produce: the box is the margin and the cell together, and the
+        // counts come from the image.
+        val spec = assertNotNull(
+            SliceSpec.ofCellSize(
+                cellWidth = 192, cellHeight = 192,
+                imageWidth = 768, imageHeight = 576,
+                offsetX = 0, offsetY = 0,
+            ),
+        )
+        assertEquals(4, spec.columns)
+        assertEquals(3, spec.rows)
+
+        // And drawn around the *second* cell, the margin shifts the grid and
+        // one column falls off the right, which is correct rather than a bug:
+        // the person said the grid starts there.
+        val shifted = assertNotNull(
+            SliceSpec.ofCellSize(192, 192, 768, 576, offsetX = 192, offsetY = 0),
+        )
+        assertEquals(3, shifted.columns)
+        assertEquals(192, shifted.rectAt(0, 0).left)
+    }
+
+    @Test
     fun `re-slicing keeps the mapping and what the person decided about each cell`() {
         val atlas = quartered()
             .appendToClip(AnimationState.WALK, topLeft)

@@ -32,6 +32,18 @@ sealed interface SpriteMapperAction {
     /** Sets the grid from the cell size, the way downloaded art is described. */
     data class SetCellSize(val pixels: Int) : SpriteMapperAction
 
+    /** Whether cells are kept square. On for almost every sheet. */
+    data class SetSquareCells(val on: Boolean) : SpriteMapperAction
+
+    /**
+     * Sets the grid by drawing one cell on the sheet.
+     *
+     * The numbers are the hard way to describe a grid you can see. Dragging a
+     * box around a single frame gives the margin and the cell size at once,
+     * and the column and row counts follow from the image.
+     */
+    data class SetGridFromBox(val rect: SourceRect) : SpriteMapperAction
+
     data object TrimToContent : SpriteMapperAction
 
     data class ToggleFrame(val frameId: String) : SpriteMapperAction

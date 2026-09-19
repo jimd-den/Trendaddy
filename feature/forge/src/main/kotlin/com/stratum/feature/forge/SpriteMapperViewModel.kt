@@ -75,6 +75,7 @@ class SpriteMapperViewModel(
         _state.value = _state.value.copy(
             atlas = atlas,
             slice = sliceOf(atlas, SheetGrid(sheet.columns, sheet.rows)),
+            squareCells = true,
             activeState = atlas.mappedStates.firstOrNull() ?: AnimationState.IDLE,
             report = SpriteValidation.validate(atlas),
             savedSheet = null,
@@ -105,16 +106,19 @@ class SpriteMapperViewModel(
         gutterY: Int = _state.value.slice?.gutterY ?: 0,
     ) {
         val atlas = _state.value.atlas ?: return
-        val spec = SliceSpec.fitting(
-            grid = SheetGrid(columns.coerceIn(1, MAX_DIVISIONS), rows.coerceIn(1, MAX_DIVISIONS)),
-            imageWidth = atlas.sourceWidth,
-            imageHeight = atlas.sourceHeight,
-            offsetX = offsetX.coerceAtLeast(0),
-            offsetY = offsetY.coerceAtLeast(0),
-            gutterX = gutterX.coerceAtLeast(0),
-            gutterY = gutterY.coerceAtLeast(0),
+        val grid = SheetGrid(columns.coerceIn(1, MAX_DIVISIONS), rows.coerceIn(1, MAX_DIVISIONS))
+        val cut = if (_state.value.squareCells) SliceSpec::squareFitting else SliceSpec::fitting
+        applySlice(
+            cut(
+                grid,
+                atlas.sourceWidth,
+                atlas.sourceHeight,
+                offsetX.coerceAtLeast(0),
+                offsetY.coerceAtLeast(0),
+                gutterX.coerceAtLeast(0),
+                gutterY.coerceAtLeast(0),
+            ),
         )
-        applySlice(spec)
     }
 
     /**
@@ -138,6 +142,74 @@ class SpriteMapperViewModel(
                 offsetY = current?.offsetY ?: 0,
                 gutterX = current?.gutterX ?: 0,
                 gutterY = current?.gutterY ?: 0,
+            ),
+        )
+    }
+
+    /**
+     * Turns square cells on or off, and re-cuts what is already there.
+     *
+     * Flipping the switch has to change the grid on screen, not just the rule
+     * for the next edit -- a toggle that quietly waits for something else to
+     * happen reads as broken.
+     */
+    fun setSquareCells(on: Boolean) {
+        val atlas = _state.value.atlas ?: return
+        val current = _state.value.slice ?: return
+        _state.value = _state.value.copy(squareCells = on)
+        val grid = SheetGrid(current.columns, current.rows)
+        applySlice(
+            if (on) {
+                SliceSpec.squareFitting(
+                    grid, atlas.sourceWidth, atlas.sourceHeight,
+                    current.offsetX, current.offsetY, current.gutterX, current.gutterY,
+                )
+            } else {
+                SliceSpec.fitting(
+                    grid, atlas.sourceWidth, atlas.sourceHeight,
+                    current.offsetX, current.offsetY, current.gutterX, current.gutterY,
+                )
+            },
+        )
+    }
+
+    /**
+     * Sets the grid from a box drawn around one cell.
+     *
+     * The box is the margin and the cell size together: where it starts is
+     * where the grid starts, how big it is is how big a cell is, and the
+     * column and row counts fall out of the image size. A box smaller than a
+     * few pixels is a tap that slipped rather than a cell, and is ignored --
+     * otherwise a stray finger replaces a good grid with a thousand cells.
+     */
+    fun setGridFromBox(rect: SourceRect) {
+        val atlas = _state.value.atlas ?: return
+        val left = rect.left.coerceIn(0, atlas.sourceWidth - 1)
+        val top = rect.top.coerceIn(0, atlas.sourceHeight - 1)
+        var width = rect.width.coerceAtMost(atlas.sourceWidth - left)
+        var height = rect.height.coerceAtMost(atlas.sourceHeight - top)
+        if (width < MIN_DRAWN_CELL || height < MIN_DRAWN_CELL) {
+            _state.value = _state.value.copy(
+                error = "That box is too small to be a cell. Drag around one frame.",
+            )
+            return
+        }
+        if (_state.value.squareCells) {
+            val side = minOf(width, height)
+            width = side
+            height = side
+        }
+        // The gap is deliberately dropped: a box drawn around one cell says
+        // nothing about what sits between cells, and keeping a gutter from a
+        // grid this replaces would shift every cell after the first.
+        applySlice(
+            SliceSpec.ofCellSize(
+                cellWidth = width,
+                cellHeight = height,
+                imageWidth = atlas.sourceWidth,
+                imageHeight = atlas.sourceHeight,
+                offsetX = left,
+                offsetY = top,
             ),
         )
     }
@@ -437,11 +509,21 @@ class SpriteMapperViewModel(
     }
 
     private fun sliceOf(atlas: SpriteAtlas, grid: SheetGrid): SliceSpec? =
-        SliceSpec.fitting(grid, atlas.sourceWidth, atlas.sourceHeight)
+        SliceSpec.squareFitting(grid, atlas.sourceWidth, atlas.sourceHeight)
+            ?: SliceSpec.fitting(grid, atlas.sourceWidth, atlas.sourceHeight)
 
     companion object {
         /** More divisions than this on a phone screen is a grid nobody can tap. */
         const val MAX_DIVISIONS = 16
+
+        /**
+         * Below this, a box drawn on the sheet was a tap that slid.
+         *
+         * Eight source pixels. Small enough that a genuinely tiny cell can
+         * still be drawn, large enough that a finger resting on the image does
+         * not cut the sheet into thousands of cells and lose the mapping.
+         */
+        const val MIN_DRAWN_CELL = 8
 
         /** Larger than this a nudge is a throw, not an adjustment. */
         const val MAX_STEP = 64
@@ -470,6 +552,8 @@ data class SpriteMapperUiState(
     val atlas: SpriteAtlas? = null,
     val sheets: List<SpriteSheet> = emptyList(),
     val slice: SliceSpec? = null,
+    /** Whether the grid is kept square. Almost every sheet wants it. */
+    val squareCells: Boolean = true,
     val activeState: AnimationState = AnimationState.IDLE,
     val report: SpriteValidationReport? = null,
     val busy: Boolean = false,
