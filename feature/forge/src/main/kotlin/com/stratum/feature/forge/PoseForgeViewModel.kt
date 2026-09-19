@@ -315,7 +315,11 @@ class PoseForgeViewModel(
             failures = emptyMap(),
             savedSheet = null,
         )
-        job = viewModelScope.launch {
+        // The one run that outlives the screen. The reference is a single
+        // request and the sheet pack is seconds of work, so those stay on the
+        // view model's own scope -- this is the quarter of an hour, and it is
+        // the only one worth surviving a person leaving the forge.
+        job = PoseRun.start {
             var failures = emptyMap<String, String>()
             var abandoned: String? = null
 
@@ -355,6 +359,13 @@ class PoseForgeViewModel(
                         withContext(Dispatchers.IO) { savePose(setId, step.key, image.bytes) }
                         val done = withContext(Dispatchers.IO) { posesDrawn(setId) }
                         _state.value = _state.value.copy(drawn = done, attempt = 1)
+                        // Reported for the notification, which is the only
+                        // thing a person can see once they have left the app.
+                        PoseRun.report(
+                            label = current.subject.trim().ifBlank { "Character" },
+                            done = script.steps.count { it.key in done },
+                            total = script.steps.size,
+                        )
                         continue@steps
                     }
 
@@ -425,6 +436,9 @@ class PoseForgeViewModel(
     fun stop() {
         job?.cancel()
         job = null
+        // Also the run itself, which no longer belongs to this scope: without
+        // this, Stop would clear the screen and leave the generations going.
+        PoseRun.stop()
         _state.value = _state.value.copy(
             busy = false,
             currentStep = null,

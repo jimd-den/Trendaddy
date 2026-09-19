@@ -23,12 +23,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.asImageBitmap
@@ -69,6 +71,7 @@ import com.stratum.core.domain.sprite.SheetPreparation
 import com.stratum.core.domain.ai.SavedCharacter
 import com.stratum.core.data.sprite.SpriteExporter
 import com.stratum.core.domain.sprite.SpriteFallback
+import com.stratum.feature.forge.PoseRun
 import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.sprite.SpriteMapper
 import com.stratum.core.domain.sprite.SpriteNamespace
@@ -136,6 +139,14 @@ fun StratumApp(
     val config = remember(seed) { GameSetup.worldConfig(seed) }
 
     val ai = remember(context) { AiWiring(context) }
+
+    // The service is started by the run beginning, not by the forge opening:
+    // it exists to protect work in flight, and one that started with the
+    // screen would be a permanent notification about nothing.
+    val generating by PoseRun.running.collectAsStateWithLifecycle()
+    LaunchedEffect(generating) {
+        if (generating) PoseGenerationService.start(context)
+    }
 
     // Sheets generated this session join the loaded packs, so a drawing made
     // five minutes ago is used by the world exactly like one a pack shipped.
