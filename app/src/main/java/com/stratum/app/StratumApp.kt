@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,6 +26,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.asImageBitmap
@@ -65,6 +69,7 @@ import com.stratum.core.domain.sprite.SheetPreparation
 import com.stratum.core.domain.ai.SavedCharacter
 import com.stratum.core.data.sprite.SpriteExporter
 import com.stratum.core.domain.sprite.SpriteFallback
+import com.stratum.core.domain.sprite.AnimationState
 import com.stratum.core.domain.sprite.SpriteMapper
 import com.stratum.core.domain.sprite.SpriteNamespace
 import com.stratum.core.domain.ai.ImageReference
@@ -235,6 +240,13 @@ fun StratumApp(
             heroClasses = content.heroClasses,
             selectedClassId = heroClassId ?: content.heroClasses.firstOrNull()?.id,
             onSelectClass = { heroClassId = it },
+            idleFrameFor = { classId ->
+                // Resolved through the same path the world uses, so what is
+                // shown here is what will actually be drawn -- a preview that
+                // came from somewhere else would be a promise the run need
+                // not keep.
+                spriteResolver(SpriteKey.Player).takeIf { classId == heroClassId }
+            },
             onBuildClass = { destination = Destination.CLASSES },
             onDescend = {
                 seed = System.currentTimeMillis()
@@ -641,6 +653,8 @@ private fun HomeScreen(
     heroClasses: List<HeroClassDefinition>,
     selectedClassId: String?,
     onSelectClass: (String) -> Unit,
+    /** The chosen character's art, so the picker shows who rather than what. */
+    idleFrameFor: (String) -> DrawableSprite? = { null },
     onBuildClass: () -> Unit,
     onDescend: () -> Unit,
     onForge: () -> Unit,
@@ -724,6 +738,15 @@ private fun HomeScreen(
                     }
                 }
                 heroClasses.firstOrNull { it.id == selectedClassId }?.let { hero ->
+                    // The character, standing, at the size the picker can
+                    // afford. A name in a list says which class; it does not
+                    // say which of the four characters you drew this is, and
+                    // that is the thing a person actually chooses by.
+                    val drawn = remember(hero.id, selectedClassId) { idleFrameFor(hero.id) }
+                    if (drawn != null) {
+                        Spacer(Modifier.height(Space.medium))
+                        IdlePortrait(drawn, modifier = Modifier.fillMaxWidth())
+                    }
                     Spacer(Modifier.height(Space.small))
                     Text(
                         text = "${hero.resolvedStats.maxHealth} hp · " +
@@ -799,3 +822,39 @@ private fun Stat(label: String, value: Int, modifier: Modifier = Modifier) {
         )
     }
 }
+
+/**
+ * One idle frame of a character, drawn the way the world draws it.
+ *
+ * Deliberately the first frame rather than a running animation: this is a menu
+ * and a looping character in it competes with the thing the person came here
+ * to press. The point is recognition -- which of the characters you made is
+ * this -- and one frame settles that.
+ */
+@Composable
+private fun IdlePortrait(sprite: DrawableSprite, modifier: Modifier = Modifier) {
+    val sheet = sprite.sheet
+    val frame = sheet.clip(AnimationState.IDLE)?.firstFrame ?: 0
+    val rect = sheet.frameRect(frame)
+    if (rect.width <= 0 || rect.height <= 0) return
+
+    Canvas(
+        modifier = modifier.height(PORTRAIT_HEIGHT),
+    ) {
+        // Fitted by height and centred: the frame's proportions belong to the
+        // character, and squeezing them to a fixed box would make a lunging
+        // stance a different person from a standing one.
+        val drawHeight = size.height
+        val drawWidth = drawHeight * rect.width / rect.height.coerceAtLeast(1)
+        drawImage(
+            image = sprite.image,
+            srcOffset = IntOffset(rect.left, rect.top),
+            srcSize = IntSize(rect.width, rect.height),
+            dstOffset = IntOffset(((size.width - drawWidth) / 2f).toInt(), 0),
+            dstSize = IntSize(drawWidth.toInt().coerceAtLeast(1), drawHeight.toInt()),
+            filterQuality = FilterQuality.None,
+        )
+    }
+}
+
+private val PORTRAIT_HEIGHT = 132.dp

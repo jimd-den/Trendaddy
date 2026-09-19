@@ -220,9 +220,13 @@ fun WorldCanvas(
                     centerX = originX + screen.x,
                     centerY = originY + screen.y,
                     projection = projection,
-                    topColor = Color(block.topColor).scaleRgb(lit),
-                    sideColor = Color(block.sideColor).scaleRgb(depthShade),
+                    topColor = Color(block.topColor).graded().scaleRgb(lit),
+                    sideColor = Color(block.sideColor).graded().scaleRgb(depthShade),
                     highlighted = pos == highlight,
+                    // Ungraded: the accent is the mining highlight and the ore
+                    // glint, whose whole job is to be the thing that stands
+                    // out. Muting it with everything else would mute the only
+                    // colours in the frame that are carrying information.
                     accent = Color(block.accentColor),
                     faces = faces,
                     shadowTop = isTop && shadowed,
@@ -457,6 +461,26 @@ private fun DrawScope.drawSprite(
     val groundY = y + projection.tileHeight * projection.zoom * 0.25f
     val left = (x - drawWidth / 2f + motion.offsetX * baseWidth).toInt()
     val top = (groundY - drawHeight + motion.offsetY * baseHeight).toInt()
+
+    // A contact shadow, drawn before the body and sized from the body.
+    //
+    // The fallback shape has had one all along and the real art never did,
+    // which is most of why a drawn character read as a sticker on the world
+    // rather than as something standing in it: with nothing under the feet
+    // there is no evidence the feet are on the ground, and the eye reads the
+    // figure as floating in front of the scene.
+    //
+    // Width comes from the sprite rather than from the tile, so a wide stance
+    // casts a wide shadow, and it tightens as the body leaves the ground --
+    // a roll or a death lifts off, and a shadow that stayed the same size
+    // through that would nail the character to the floor it is leaving.
+    val lifted = ((groundY - (top + drawHeight)) / drawHeight).coerceIn(0f, 1f)
+    val shadowWidth = drawWidth * SHADOW_WIDTH * (1f - lifted * 0.45f)
+    drawOval(
+        color = Color.Black.copy(alpha = SHADOW_ALPHA * (1f - lifted * 0.6f)),
+        topLeft = Offset(x - shadowWidth / 2f, groundY - shadowWidth * SHADOW_SQUASH / 2f),
+        size = Size(shadowWidth, shadowWidth * SHADOW_SQUASH),
+    )
 
     val blit: (Float, ColorFilter?) -> Unit = { alpha, tint ->
         drawImage(
@@ -989,6 +1013,38 @@ private fun DrawScope.drawGlyph(
     }
 }
 
+/**
+ * Terrain pulled towards earth and away from poster paint.
+ *
+ * The pack's colours are chosen to be legible one block at a time, in a list,
+ * on a settings screen -- so grass is grass-green and laterite is orange. Ten
+ * thousand of them at once is a different picture entirely: fully saturated
+ * ground reads as a toybox, the character standing on it reads as a sticker
+ * placed on top, and the light has nowhere left to go because everything is
+ * already at full intensity.
+ *
+ * Graded here rather than in the pack, for two reasons. The pack's colours
+ * stay correct for the places they are shown as swatches, and the whole look
+ * of the world is one constant rather than a hundred edited values that
+ * someone would have to re-tune by hand for the next pack.
+ *
+ * Desaturating towards luminance rather than towards grey keeps each block
+ * distinguishable from its neighbours -- which matters, because the terrain is
+ * also the map.
+ */
+private fun Color.graded(): Color {
+    val luminance = red * 0.299f + green * 0.587f + blue * 0.114f
+    // Bright colours come down, dark ones stay. A flat multiply crushed the
+    // blocks that were already dark -- deep stone went to near black -- and
+    // then depth shading multiplied that again, so the bottom of a shaft had
+    // no range left to read as depth at all.
+    val darken = 1f - (1f - TERRAIN_VALUE) * luminance
+    fun pull(channel: Float) =
+        ((luminance + (channel - luminance) * TERRAIN_SATURATION) * darken)
+            .coerceIn(0f, 1f)
+    return Color(pull(red), pull(green), pull(blue), alpha)
+}
+
 private fun Color.scaleRgb(factor: Float) = Color(
     red = (red * factor).coerceIn(0f, 1f),
     green = (green * factor).coerceIn(0f, 1f),
@@ -1023,6 +1079,24 @@ private const val SPREAD_FRACTION = 0.16f
  * the character is standing on.
  */
 private const val SPRITE_HEIGHT_TILES = 1.9f
+
+/** How much of the sprite's width the shadow spans when standing. */
+private const val SHADOW_WIDTH = 0.72f
+
+/** The camera's tilt, near enough: a circle on the ground reads this flat. */
+private const val SHADOW_SQUASH = 0.42f
+private const val SHADOW_ALPHA = 0.42f
+
+/**
+ * How much of the pack's colour survives, and how bright it stays.
+ *
+ * Half the chroma and a little off the top. Far enough that the ground stops
+ * shouting and the character becomes the brightest thing in the frame, which
+ * is what makes it read as standing in the world rather than on it; not so far
+ * that a biome stops being recognisable by its colour.
+ */
+private const val TERRAIN_SATURATION = 0.5f
+private const val TERRAIN_VALUE = 0.78f
 /** Fraction of a tile width. Was 0.22; a player you cannot find is not a player. */
 private const val PLAYER_RADIUS = 0.34f
 /**
