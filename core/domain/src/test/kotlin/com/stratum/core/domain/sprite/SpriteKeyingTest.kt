@@ -54,6 +54,83 @@ class SpriteKeyingTest {
     }
 
     @Test
+    fun `chroma is cleared by range, including where a flood cannot reach`() {
+        // The colours are the ones a real generated pose actually arrives
+        // with: the backdrop asked for as flat #00FF00 comes back as a spread
+        // of greens, and the figure is bronze, gold and dark red.
+        val backdrop = intArrayOf(
+            argb(255, 1, 251, 1),
+            argb(255, 0, 248, 0),
+            argb(255, 16, 232, 16),
+            argb(255, 24, 224, 24),
+        )
+        val bronze = argb(255, 176, 134, 86)
+        val gold = argb(255, 214, 176, 62)
+        val kilt = argb(255, 122, 26, 38)
+
+        val pixels = IntArray(width * height) { i ->
+            val x = i % width
+            val y = i / width
+            val inSubject = x in 12..19 && y in 12..19
+            // The pocket between an arm and the ribs: enclosed by the figure,
+            // so nothing entering from the outside ever arrives.
+            val inPocket = x in 14..15 && y in 14..17
+            when {
+                inSubject && inPocket -> backdrop[(x + y) % backdrop.size]
+                inSubject && y < 15 -> bronze
+                inSubject && y < 17 -> gold
+                inSubject -> kilt
+                else -> backdrop[(x + y) % backdrop.size]
+            }
+        }
+
+        val result = SpriteKeying.key(pixels, width, height)
+
+        assertEquals(KeyStrategy.CHROMA, result.strategy)
+        assertEquals(0, alphaAt(result.pixels, 0, 0), "the backdrop survived at the edge")
+        assertEquals(
+            0,
+            alphaAt(result.pixels, 14, 15),
+            "an enclosed pocket kept the chroma, which reads as a hole in the character",
+        )
+        // None of what a character is made of is green-dominant, so the range
+        // that takes the backdrop cannot reach the figure.
+        assertEquals(255, alphaAt(result.pixels, 13, 13), "bronze was keyed out")
+        assertEquals(255, alphaAt(result.pixels, 18, 16), "gold trim was keyed out")
+        assertEquals(255, alphaAt(result.pixels, 18, 18), "the red kilt was keyed out")
+    }
+
+    @Test
+    fun `a half-chroma edge pixel goes with the backdrop`() {
+        // Antialiasing and lossy compression leave a rim of pixels that are
+        // part backdrop and part costume. Left opaque they fringe the whole
+        // silhouette green.
+        val pixels = sheet(background = { _, _ -> argb(255, 0, 250, 0) })
+        val rim = argb(255, 88, 192, 43) // halfway between the backdrop and bronze
+        pixels[12 * width + 12] = rim
+
+        val result = SpriteKeying.key(pixels, width, height)
+
+        assertEquals(KeyStrategy.CHROMA, result.strategy)
+        assertEquals(0, alphaAt(result.pixels, 12, 12), "a half-backdrop rim pixel stayed opaque")
+    }
+
+    @Test
+    fun `a backdrop that is merely greenish is not treated as chroma`() {
+        // The olive a model reaches for when it ignores the instruction is a
+        // neighbour of the character's own bronze, so it has to go through the
+        // careful path rather than a colour range.
+        val olive = argb(255, 138, 172, 96)
+        val pixels = sheet(background = { _, _ -> olive })
+
+        val result = SpriteKeying.key(pixels, width, height)
+
+        assertEquals(KeyStrategy.SOLID, result.strategy)
+        assertEquals(0, alphaAt(result.pixels, 0, 0))
+        assertEquals(255, alphaAt(result.pixels, 15, 15), "the subject was erased")
+    }
+
+    @Test
     fun `a solid backdrop is cleared from the edges in`() {
         val teal = argb(255, 20, 140, 140)
         val pixels = sheet(background = { _, _ -> teal })
@@ -307,7 +384,7 @@ class NoisyBackdropKeyingTest {
 
     @Test
     fun `a compressed flat backdrop is still one colour`() {
-        val keyed = SpriteKeying.key(noisyBackdrop(GREEN, jitter = 12), width, height)
+        val keyed = SpriteKeying.key(noisyBackdrop(BACKDROP, jitter = 12), width, height)
 
         assertEquals(KeyStrategy.SOLID, keyed.strategy)
         assertTrue(keyed.clearedPixels > 0, "the backdrop survived, so the sprite wears it")
@@ -318,14 +395,33 @@ class NoisyBackdropKeyingTest {
 
     @Test
     fun `a clean flat backdrop is unaffected by the merge`() {
-        val keyed = SpriteKeying.key(noisyBackdrop(GREEN, jitter = 0), width, height)
+        val keyed = SpriteKeying.key(noisyBackdrop(BACKDROP, jitter = 0), width, height)
 
         assertEquals(KeyStrategy.SOLID, keyed.strategy)
         assertTrue(keyed.clearedPixels > width * height / 2)
     }
 
+    @Test
+    fun `a compressed chroma backdrop goes by range, not by merging shades`() {
+        // Chroma is the case the merge was built for, and the case it no
+        // longer has to handle: every shade compression scatters a green
+        // backdrop into is still green-dominant, so the range takes all of
+        // them without having to work out that they are one colour.
+        val keyed = SpriteKeying.key(noisyBackdrop(CHROMA_GREEN, jitter = 12), width, height)
+
+        assertEquals(KeyStrategy.CHROMA, keyed.strategy)
+        assertTrue(keyed.clearedPixels > width * height / 2)
+        assertEquals(SUBJECT, keyed.pixels[32 * width + 32], "the subject went with the backdrop")
+    }
+
     private companion object {
-        const val GREEN = 0xFF20E010.toInt()
+        /**
+         * Not green: green is chroma and short-circuits the merge this class
+         * exists to test. The scatter a lossy codec makes of a flat colour is
+         * not a property of the colour, so any flat backdrop proves it.
+         */
+        const val BACKDROP = 0xFF2080E0.toInt()
+        const val CHROMA_GREEN = 0xFF20E010.toInt()
         const val SUBJECT = 0xFFB07840.toInt()
     }
 }

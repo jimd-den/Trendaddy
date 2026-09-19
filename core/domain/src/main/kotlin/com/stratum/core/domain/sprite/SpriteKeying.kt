@@ -18,6 +18,11 @@ enum class KeyStrategy {
     /** A solid backdrop, cleared inward from the edges. */
     SOLID,
 
+    /**
+     * A saturated chroma backdrop, cleared by colour range wherever it lands.
+     */
+    CHROMA,
+
     /** Nothing confidently identifiable. Left alone rather than guessed at. */
     NONE,
 }
@@ -99,6 +104,29 @@ object SpriteKeying {
         if (looksLikeCheckerboard(dominant)) {
             val cleared = clearEverywhere(out, dominant, tolerance)
             return survivorsOf(pixels, out, KeyStrategy.CHECKERBOARD, cleared)
+        }
+
+        // A chroma backdrop is not a colour to match, it is a range to drop.
+        //
+        // Everything below matches the backdrop's *colour*, within a tolerance
+        // of a few steps, and then argues about which of the matching pixels
+        // may be cleared. Neither half survives contact with real chroma. The
+        // backdrop is asked for as flat #00FF00 and comes back compressed, so
+        // it arrives as a spread of greens rather than one; and the pixels
+        // that matter most are the ones a flood can never reach, in the pocket
+        // between an arm and the ribs or inside a bent elbow, which is where
+        // bright green was found sitting *inside* the character on four of
+        // nine real poses.
+        //
+        // Asking instead whether a pixel is green-dominant answers both at
+        // once, and answers the edge as well: a pixel half backdrop and half
+        // bronze is still green-dominant and still has no business being
+        // opaque. No part of a character is this green -- the test is not
+        // "greenish", it is a green channel clear of both others by more than
+        // a fifth of the range -- so nothing of the figure is at stake.
+        if (dominant.any { isChroma(it) }) {
+            val cleared = clearChroma(out)
+            return survivorsOf(pixels, out, KeyStrategy.CHROMA, cleared)
         }
 
         // A colour that surrounds every frame is the canvas. Clearing it
@@ -293,6 +321,23 @@ object SpriteKeying {
         return sampled > 0 && matched >= sampled * CANVAS_COVERAGE
     }
 
+    /** Green clear of both other channels: a backdrop nobody would wear. */
+    private fun isChroma(color: Int): Boolean {
+        val g = greenOf(color)
+        return g >= CHROMA_MIN_GREEN && g - max(redOf(color), blueOf(color)) >= CHROMA_MARGIN
+    }
+
+    private fun clearChroma(out: IntArray): Int {
+        var cleared = 0
+        for (i in out.indices) {
+            if (alphaOf(out[i]) > 0 && isChroma(out[i])) {
+                out[i] = out[i] and RGB_MASK
+                cleared++
+            }
+        }
+        return cleared
+    }
+
     private fun clearEverywhere(out: IntArray, background: List<Int>, tolerance: Int): Int {
         if (background.isEmpty()) return 0
         var cleared = 0
@@ -395,6 +440,22 @@ object SpriteKeying {
     private const val MAX_BACKGROUND_COLORS = 2
     /** A background has to account for most of the border to count as one. */
     private const val BORDER_COVERAGE = 0.80f
+    /**
+     * How far the green channel must clear the other two.
+     *
+     * 60 of 255. Measured against the two things it has to separate: the
+     * backdrop arrives between 200 and 248 clear of the others even after
+     * compression, and the most saturated thing the characters wear -- gold
+     * trim, bronze plate, a red kilt -- is not green-dominant at all. The gap
+     * between those is enormous, so this sits low enough to take the
+     * half-backdrop pixels along a silhouette's edge and nowhere near
+     * anything a figure is made of.
+     */
+    private const val CHROMA_MARGIN = 60
+
+    /** Dark enough to be a shadow rather than a backdrop. */
+    private const val CHROMA_MIN_GREEN = 90
+
     private const val CHECKER_MAX_SATURATION = 24
     private const val CHECKER_MIN_GAP = 8
     private const val CHECKER_MAX_GAP = 90

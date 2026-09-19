@@ -433,7 +433,10 @@ class PoseForgeViewModel(
                     savedSheet = sheet,
                     message = buildString {
                         append("Saved as a ${sheet.columns}x${sheet.rows} sheet at ")
-                        append("${current.cellSize}px a frame. ")
+                        // The frame size the sheet actually came out at, which
+                        // is not the size that was asked for: the width is cut
+                        // to the figure's proportions after measuring it.
+                        append("${sheet.frameWidth}x${sheet.frameHeight} a frame. ")
                         // A hole in an animation looks exactly like a frame the
                         // character is invisible for, so it is named rather
                         // than left to be noticed in the world.
@@ -472,7 +475,11 @@ class PoseForgeViewModel(
         private const val MAX_SLUG = 32
 
         /** Frame sizes worth packing down to, at this camera. */
-        val CELL_SIZES = listOf(64, 96, 128, 192)
+        /**
+         * Frame heights offered, not frame sizes: the width is taken from the
+         * art once it has been measured, so it is not a choice to make here.
+         */
+        val CELL_SIZES = listOf(96, 128, 192, 256, 384)
 
         fun factory(
             drawReference: suspend (BasePoseRequest, GenerationObserver) -> Result<GeneratedImage>,

@@ -19,13 +19,16 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
 /**
- * Asks an OpenAI-compatible endpoint for an image.
+ * Asks an image endpoint to draw something, or to redraw something it is given.
  *
- * Providers disagree about how an image comes back even when they agree on the
- * request, so this tries the shapes in the order they actually occur: a base64
- * payload, a URL to fetch, or an image embedded in a chat reply. A sprite sheet
- * is worth the extra attempts -- failing because a provider answered in its own
- * dialect would be a poor reason to lose a generation.
+ * Both go to /images/generations. Editing once had to be posted as a chat turn
+ * with the picture inside it, which was the only shape providers served it in;
+ * the image API now takes reference images directly, and the chat route is not
+ * merely redundant but broken -- a model whose only output is an image has no
+ * chat endpoint to answer on, and answers a chat request with a 404.
+ *
+ * Providers still disagree about how the image comes back, so both shapes that
+ * occur are tried: an inline base64 payload, or a URL to fetch.
  */
 class OpenRouterImageModel(
     private val configProvider: () -> ProviderConfig,
@@ -48,28 +51,32 @@ class OpenRouterImageModel(
             }
 
             val model = request.modelId ?: config.imageModel
-            // Two different APIs, because they are two different operations.
-            // Drawing from nothing is /images/generations; editing a picture
-            // that already exists is a chat turn with the picture in it, which
-            // is the only shape providers serve image editing in.
+            // One endpoint for both operations. Drawing from nothing and
+            // redrawing something that exists are the same request to the
+            // image API; they differ only by whether references came with it.
             val editing = request.references.isNotEmpty()
-            val endpoint = if (editing) {
-                "${config.baseUrl.trimEnd('/')}/chat/completions"
-            } else {
-                "${config.baseUrl.trimEnd('/')}/images/generations"
-            }
-            val payload = if (editing) {
-                editPayload(model, request)
-            } else {
-                moshi.adapter(ImageRequestDto::class.java).toJson(
-                    ImageRequestDto(
-                        model = model,
-                        prompt = request.prompt,
-                        n = 1,
-                        response_format = "b64_json",
-                    ),
-                )
-            }
+            val endpoint = "${config.baseUrl.trimEnd('/')}/images/generations"
+            val payload = moshi.adapter(ImageRequestDto::class.java).toJson(
+                ImageRequestDto(
+                    model = model,
+                    prompt = request.prompt,
+                    n = 1,
+                    response_format = "b64_json",
+                    input_references = request.references
+                        .map { reference ->
+                            val encoded = Base64.encodeToString(reference.bytes, Base64.NO_WRAP)
+                            ImageReferenceDto(
+                                image_url = ImageUrlDto(
+                                    "data:${reference.mimeType};base64,$encoded",
+                                ),
+                            )
+                        }
+                        // Absent rather than empty: a model that does not edit
+                        // refuses the field outright, and a plain generation
+                        // has no business carrying it.
+                        .ifEmpty { null },
+                ),
+            )
             // The key lives in a header and is never recorded. Everything else
             // is, because a rejection is only explicable if you can see exactly
             // what was asked for.
@@ -105,7 +112,7 @@ class OpenRouterImageModel(
                         throw failureFor(response.code, body, model)
                     }
                     observer.onStage(GenerationStage.DECODING)
-                    val bytes = if (editing) editedImage(body, model) else drawnImage(body, model)
+                    val bytes = drawnImage(body, model)
                     observer.onStage(GenerationStage.MEASURING)
                     toGeneratedImage(bytes, request)
                 }
@@ -113,11 +120,11 @@ class OpenRouterImageModel(
 
             observer.onAttempt(
                 GenerationAttempt(
-                    id = "img_${'$'}startedAt",
+                    id = "img_$startedAt",
                     label = if (editing) {
-                        "Pose edit · ${'$'}{request.width}×${'$'}{request.height}"
+                        "Pose edit · ${request.width}×${request.height}"
                     } else {
-                        "Image · ${'$'}{request.width}×${'$'}{request.height}"
+                        "Image · ${request.width}×${request.height}"
                     },
                     endpoint = endpoint,
                     model = model,
@@ -148,36 +155,6 @@ class OpenRouterImageModel(
             }
         }
 
-    /**
-     * A chat turn carrying the prompt and the picture to edit.
-     *
-     * `modalities` is what tells the provider an image is wanted back rather
-     * than a description of one. Without it a perfectly capable image editor
-     * answers a request to redraw a pose with a paragraph about how it would
-     * redraw the pose.
-     */
-    private fun editPayload(model: String, request: ImageRequest): String {
-        val parts = buildList {
-            add(ContentPartDto(type = "text", text = request.prompt))
-            request.references.forEach { reference ->
-                val encoded = Base64.encodeToString(reference.bytes, Base64.NO_WRAP)
-                add(
-                    ContentPartDto(
-                        type = "image_url",
-                        image_url = ImageUrlDto("data:${reference.mimeType};base64,$encoded"),
-                    ),
-                )
-            }
-        }
-        return moshi.adapter(EditRequestDto::class.java).toJson(
-            EditRequestDto(
-                model = model,
-                messages = listOf(EditMessageDto(role = "user", content = parts)),
-                modalities = listOf("image", "text"),
-            ),
-        )
-    }
-
     /** The image from an /images/generations reply. */
     private fun drawnImage(body: String, model: String): ByteArray {
         val parsed = moshi.adapter(ImageResponseDto::class.java).fromJson(body)
@@ -190,43 +167,6 @@ class OpenRouterImageModel(
             !first.url.isNullOrBlank() -> download(first.url)
             else -> throw GenerationException("The model's reply contained no image data")
         }
-    }
-
-    /**
-     * The image from a chat reply.
-     *
-     * Providers put it in one of two places and there is no way to know which
-     * in advance, so both are tried: the structured `images` array, and failing
-     * that a data URI sitting in the text. The second is not a hypothetical --
-     * it is what several providers do -- and falling back to it costs one
-     * regular expression against a reply we already have.
-     */
-    private fun editedImage(body: String, model: String): ByteArray {
-        val parsed = runCatching {
-            moshi.adapter(EditResponseDto::class.java).fromJson(body)
-        }.getOrNull()
-
-        val message = parsed?.choices?.firstOrNull()?.message
-        val fromImages = message?.images?.firstNotNullOfOrNull { it.image_url?.url }
-        if (!fromImages.isNullOrBlank()) {
-            return if (fromImages.startsWith("http")) download(fromImages) else decodeBase64(fromImages)
-        }
-
-        val inline = DATA_URI.find(body)?.value
-        if (inline != null) return decodeBase64(inline)
-
-        // A model that answered in words is the single most common way this
-        // fails, and saying so beats "no image data" -- it names the fix, which
-        // is to choose a model that edits images.
-        val text = (message?.content as? String)?.take(MAX_RECORDED_BODY).orEmpty()
-        throw GenerationException(
-            if (text.isNotBlank()) {
-                "'$model' replied with text rather than an image. It may not be an image " +
-                    "editing model. It said: ${text.take(200)}"
-            } else {
-                "'$model' replied with no image data"
-            },
-        )
     }
 
     /**
@@ -346,6 +286,21 @@ internal data class ImageRequestDto(
     val prompt: String,
     val n: Int,
     val response_format: String,
+    /** The pictures to work from. Null, not empty, when drawing from nothing. */
+    val input_references: List<ImageReferenceDto>? = null,
+)
+
+/**
+ * A picture handed to the model to work from.
+ *
+ * The `type` discriminator is required and has exactly one accepted value, so
+ * it is not a parameter -- a caller cannot get it right by choosing, only
+ * wrong by choosing.
+ */
+@JsonClass(generateAdapter = true)
+internal data class ImageReferenceDto(
+    val image_url: ImageUrlDto,
+    val type: String = "image_url",
 )
 
 @JsonClass(generateAdapter = true)
@@ -355,37 +310,4 @@ internal data class ImageResponseDto(val data: List<ImageDatumDto>?)
 internal data class ImageDatumDto(val b64_json: String?, val url: String?)
 
 @JsonClass(generateAdapter = true)
-internal data class EditRequestDto(
-    val model: String,
-    val messages: List<EditMessageDto>,
-    /** Says an image is wanted back, not a description of one. */
-    val modalities: List<String>,
-)
-
-@JsonClass(generateAdapter = true)
-internal data class EditMessageDto(val role: String, val content: List<ContentPartDto>)
-
-@JsonClass(generateAdapter = true)
-internal data class ContentPartDto(
-    val type: String,
-    val text: String? = null,
-    val image_url: ImageUrlDto? = null,
-)
-
-@JsonClass(generateAdapter = true)
 internal data class ImageUrlDto(val url: String)
-
-@JsonClass(generateAdapter = true)
-internal data class EditResponseDto(val choices: List<EditChoiceDto>?)
-
-@JsonClass(generateAdapter = true)
-internal data class EditChoiceDto(val message: EditReplyDto?)
-
-// `content` is Any? because providers disagree about whether a reply's content
-// is a string or a list of parts, and a wrong guess makes the whole reply
-// unparseable -- including the image sitting next to it.
-@JsonClass(generateAdapter = true)
-internal data class EditReplyDto(
-    val content: Any? = null,
-    val images: List<ContentPartDto>? = null,
-)

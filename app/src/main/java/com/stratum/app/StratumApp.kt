@@ -253,7 +253,7 @@ fun StratumApp(
 
         Destination.CLASSES -> {
             val classViewModel: ClassForgeViewModel = viewModel(
-                key = "classes-${'$'}classRevision",
+                key = "classes-$classRevision",
                 factory = ClassForgeViewModel.factory(
                     content = content,
                     saveClass = { hero ->

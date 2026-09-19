@@ -640,7 +640,7 @@ private fun SheetPanel(
             horizontalArrangement = Arrangement.spacedBy(Space.small),
         ) {
             Text(
-                text = "Frame size",
+                text = "Frame height",
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.inkMuted,
             )
@@ -655,8 +655,10 @@ private fun SheetPanel(
 
         Spacer(Modifier.height(Space.small))
         Text(
-            text = "The poses are kept at full size, so this can be packed again at another " +
-                "size later without drawing anything twice.",
+            text = "Frame width is taken from the character once the poses have been " +
+                "measured, so a tall figure is not padded out with empty background. " +
+                "The poses are kept at full size, so this can be packed again at another " +
+                "height later without drawing anything twice.",
             style = MaterialTheme.typography.labelSmall,
             color = colors.inkMuted,
         )

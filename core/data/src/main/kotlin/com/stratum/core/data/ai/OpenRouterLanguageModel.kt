@@ -101,8 +101,8 @@ class OpenRouterLanguageModel(
 
             observer.onAttempt(
                 GenerationAttempt(
-                    id = "txt_${'$'}startedAt",
-                    label = "Text · ${'$'}{request.maxTokens} tokens",
+                    id = "txt_$startedAt",
+                    label = "Text · ${request.maxTokens} tokens",
                     endpoint = endpoint,
                     model = model,
                     requestBody = payload,
@@ -179,7 +179,7 @@ data class ProviderConfig(
      * almost never the one that draws a sprite sheet, and making the player
      * swap a single field between tasks is a trap.
      */
-    val imageModel: String = "google/gemini-2.5-flash-image",
+    val imageModel: String = "meta/muse-image",
     val baseUrl: String = "https://openrouter.ai/api/v1/",
     val displayName: String = "OpenRouter",
     val refererUrl: String = "https://github.com/jimd-den/Trendaddy",

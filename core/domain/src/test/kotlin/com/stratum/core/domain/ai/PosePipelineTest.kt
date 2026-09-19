@@ -1,6 +1,7 @@
 package com.stratum.core.domain.ai
 
 import com.stratum.core.domain.sprite.AnimationState
+import com.stratum.core.domain.sprite.AtlasBaker
 import com.stratum.core.domain.sprite.PoseCell
 import com.stratum.core.domain.sprite.PoseSheetPlanner
 import kotlinx.coroutines.test.runTest
@@ -144,12 +145,83 @@ class PoseSheetPlannerTest {
         val huge = assertNotNull(
             PoseSheetPlanner.plan("t", "T", mapOf(AnimationState.IDLE to 1), cellSize = 4096),
         )
-        assertEquals(PoseSheetPlanner.MAX_CELL, huge.cellSize)
+        assertEquals(PoseSheetPlanner.MAX_CELL, huge.cellHeight)
 
         val tiny = assertNotNull(
             PoseSheetPlanner.plan("t", "T", mapOf(AnimationState.IDLE to 1), cellSize = 1),
         )
-        assertEquals(PoseSheetPlanner.MIN_CELL, tiny.cellSize)
+        assertEquals(PoseSheetPlanner.MIN_CELL, tiny.cellHeight)
+    }
+
+    @Test
+    fun `cells are cut to the figure, not to a square`() {
+        val plan = assertNotNull(
+            PoseSheetPlanner.plan(
+                id = "t",
+                name = "T",
+                frameCounts = mapOf(AnimationState.IDLE to 2),
+                cellSize = 192,
+            ),
+        )
+        assertEquals(192, plan.cellWidth, "a plan starts square, having measured nothing")
+
+        // The real numbers from a generated set: the widest pose was 486
+        // source pixels across and the tallest 906 down.
+        val fitted = plan.fittedTo(contentWidth = 486, contentHeight = 906)
+        assertEquals(192, fitted.cellHeight, "the height asked for was not honoured")
+        assertEquals(103, fitted.cellWidth)
+
+        // What this buys is sheet, not detail. The character is drawn 103
+        // pixels across either way -- the common scale is set by the height in
+        // both cases -- but a square cell would surround it with 89 columns of
+        // nothing, and it is paying for that emptiness across every cell that
+        // makes a taller cell look unaffordable.
+        val scale = minOf(
+            fitted.cellWidth.toFloat() / 486,
+            fitted.cellHeight.toFloat() / 906,
+        )
+        assertTrue(
+            (486 * scale) / fitted.cellWidth > 0.95f,
+            "the widest pose still does not fill the width of its cell",
+        )
+        assertTrue(
+            fitted.width < plan.width,
+            "fitting the cells did not make the sheet any smaller",
+        )
+
+        // The runtime cuts frames on the sheet's own frame size, so a sheet
+        // that disagreed with the cells it was drawn in would shear.
+        assertEquals(fitted.cellWidth, fitted.sheet.frameWidth)
+        assertEquals(fitted.cellHeight, fitted.sheet.frameHeight)
+        assertEquals(fitted.cellWidth * fitted.columns, fitted.width)
+    }
+
+    @Test
+    fun `a set too big for one texture is brought back inside it`() {
+        val plan = assertNotNull(
+            PoseSheetPlanner.plan(
+                id = "t",
+                name = "T",
+                frameCounts = AnimationState.entries.associateWith { 8 },
+                cellSize = PoseSheetPlanner.MAX_CELL,
+            ),
+        )
+        // A wide figure at the largest cell across a full script would run off
+        // the end of any texture a GPU will take.
+        val fitted = plan.fittedTo(contentWidth = 900, contentHeight = 900)
+        assertTrue(fitted.width <= AtlasBaker.MAX_SHEET_EDGE, "sheet is ${fitted.width} wide")
+        assertTrue(fitted.height <= AtlasBaker.MAX_SHEET_EDGE, "sheet is ${fitted.height} tall")
+    }
+
+    @Test
+    fun `measuring nothing leaves the plan alone`() {
+        val plan = assertNotNull(
+            PoseSheetPlanner.plan("t", "T", mapOf(AnimationState.IDLE to 1), cellSize = 192),
+        )
+        // Not a hypothetical: every pose in the set failing to decode is what
+        // an exhausted key looks like, and a divide by zero on top of that
+        // would replace a clear failure with a crash.
+        assertEquals(plan, plan.fittedTo(0, 0))
     }
 
     @Test

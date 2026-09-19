@@ -379,6 +379,7 @@ fun SpriteForgeContent(
                 KeyStrategy.CHECKERBOARD ->
                     "The model drew a checkerboard instead of being transparent. Removed."
                 KeyStrategy.SOLID -> "A solid background was removed."
+                KeyStrategy.CHROMA -> "The chroma background was removed."
                 KeyStrategy.ALREADY_TRANSPARENT -> null
                 KeyStrategy.NONE -> "No background could be identified; the sheet was kept as drawn."
             }

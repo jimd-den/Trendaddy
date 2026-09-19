@@ -78,15 +78,20 @@ object PoseSheetComposer {
         }
         if (bounds.isEmpty()) return null
 
+        // Now that the figure's proportions are known, the cells are cut to
+        // fit it. A square cell would spend two thirds of its width on empty
+        // background and shrink the character to pay for it.
+        val fitted = plan.fittedTo(widest, tallest)
+
         // One factor for the whole set. The figure that needs the most room
         // decides it, and everything else keeps its real size relative to that.
         val scale = min(
-            plan.cellSize.toFloat() / widest.coerceAtLeast(1),
-            plan.cellSize.toFloat() / tallest.coerceAtLeast(1),
+            fitted.cellWidth.toFloat() / widest.coerceAtLeast(1),
+            fitted.cellHeight.toFloat() / tallest.coerceAtLeast(1),
         )
 
         val target = runCatching {
-            Bitmap.createBitmap(plan.width, plan.height, Bitmap.Config.ARGB_8888)
+            Bitmap.createBitmap(fitted.width, fitted.height, Bitmap.Config.ARGB_8888)
         }.getOrNull() ?: return null
         val canvas = Canvas(target)
         // Filtered, unlike the atlas baker: this is a real downscale of
@@ -99,7 +104,7 @@ object PoseSheetComposer {
         }
 
         val missing = mutableListOf<String>()
-        for (cell in plan.cells) {
+        for (cell in fitted.cells) {
             val rect = bounds[cell.key]
             val bytes = if (rect == null) null else loadPose(cell.key)
             if (rect == null || bytes == null) {
@@ -114,11 +119,11 @@ object PoseSheetComposer {
 
             val width = (rect.width * scale).roundToInt().coerceAtLeast(1)
             val height = (rect.height * scale).roundToInt().coerceAtLeast(1)
-            val cellRect = plan.rectFor(cell)
+            val cellRect = fitted.rectFor(cell)
             // Centred across and standing on the floor of the cell: the same
             // anchoring the atlas baker uses, and for the same reason.
-            val left = cellRect.left + (plan.cellSize - width) / 2
-            val top = cellRect.top + (plan.cellSize - height)
+            val left = cellRect.left + (fitted.cellWidth - width) / 2
+            val top = cellRect.top + (fitted.cellHeight - height)
 
             canvas.drawBitmap(
                 keyed,
@@ -134,7 +139,9 @@ object PoseSheetComposer {
         target.recycle()
         if (!ok) return null
 
-        return ComposedSheet(sheet = plan.sheet, bytes = out.toByteArray(), missing = missing)
+        // fitted.sheet, not plan.sheet: the frame size the runtime cuts on has
+        // to be the size the frames were actually drawn at.
+        return ComposedSheet(sheet = fitted.sheet, bytes = out.toByteArray(), missing = missing)
     }
 
     /** The box the figure actually occupies, once the chroma is gone. */

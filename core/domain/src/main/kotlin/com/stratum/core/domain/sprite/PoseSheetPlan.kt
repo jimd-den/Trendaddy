@@ -1,5 +1,8 @@
 package com.stratum.core.domain.sprite
 
+import kotlin.math.ceil
+import kotlin.math.min
+
 /** Where one generated pose lands on the finished sheet. */
 data class PoseCell(
     /** Matches the pose step that asked for it, so a retry replaces the right cell. */
@@ -36,24 +39,71 @@ data class PoseCell(
  * and dropped back into place without disturbing the other thirty-nine.
  */
 data class PoseSheetPlan(
-    val cellSize: Int,
+    val cellWidth: Int,
+    val cellHeight: Int,
     val columns: Int,
     val rows: Int,
     val cells: List<PoseCell>,
     val sheet: SpriteSheet,
 ) {
-    val width: Int get() = columns * cellSize
-    val height: Int get() = rows * cellSize
+    val width: Int get() = columns * cellWidth
+    val height: Int get() = rows * cellHeight
 
     fun cellFor(key: String): PoseCell? = cells.firstOrNull { it.key == key }
 
     /** Where a cell sits on the composited image, for the layer that has pixels. */
     fun rectFor(cell: PoseCell): FrameRect = FrameRect(
-        left = cell.column * cellSize,
-        top = cell.row * cellSize,
-        width = cellSize,
-        height = cellSize,
+        left = cell.column * cellWidth,
+        top = cell.row * cellHeight,
+        width = cellWidth,
+        height = cellHeight,
     )
+
+    /**
+     * The same plan with cells shaped like the figure that will stand in them.
+     *
+     * Square cells are what make a finished sheet look far coarser than the
+     * pixel count suggests. A standing human is roughly a third as wide as it
+     * is tall, and a set scaled to fit the tallest frame into a square cell
+     * then spends two thirds of every cell on nothing: measured on real
+     * generated art, the character came out 34 pixels wide inside a 96 pixel
+     * cell. The lost detail is all in the direction that carries the
+     * silhouette -- an arm, a blade, the gap between the legs.
+     *
+     * So the height asked for is honoured and the width is taken from the art:
+     * the widest and tallest content across the whole set, which is the same
+     * box the common scale is derived from. Every cell keeps identical
+     * dimensions, because the runtime cuts frames on a fixed grid, and a
+     * per-frame cell would shear the sheet.
+     *
+     * @param contentWidth the widest content box in the set, in source pixels.
+     * @param contentHeight the tallest. Both come from measuring; this cannot
+     *   be decided when the plan is made, because nothing has been drawn yet.
+     */
+    fun fittedTo(contentWidth: Int, contentHeight: Int): PoseSheetPlan {
+        if (contentWidth <= 0 || contentHeight <= 0) return this
+
+        var height = cellHeight
+        var width = ceil(height.toDouble() * contentWidth / contentHeight).toInt()
+            .coerceAtLeast(PoseSheetPlanner.MIN_CELL)
+
+        // A sheet no GPU will take as one texture is worse than a coarse one.
+        val shrink = min(
+            AtlasBaker.MAX_SHEET_EDGE.toDouble() / (columns.toDouble() * width),
+            AtlasBaker.MAX_SHEET_EDGE.toDouble() / (rows.toDouble() * height),
+        )
+        if (shrink < 1.0) {
+            width = (width * shrink).toInt().coerceAtLeast(PoseSheetPlanner.MIN_CELL)
+            height = (height * shrink).toInt().coerceAtLeast(PoseSheetPlanner.MIN_CELL)
+        }
+
+        if (width == cellWidth && height == cellHeight) return this
+        return copy(
+            cellWidth = width,
+            cellHeight = height,
+            sheet = sheet.copy(frameWidth = width, frameHeight = height),
+        )
+    }
 }
 
 /**
@@ -74,8 +124,10 @@ data class PackedSheet(val sheet: SpriteSheet, val missing: List<String>)
  * open in an image editor and understand at a glance, which matters more for an
  * asset that took forty generations to make than the kilobytes do.
  *
- * Square cells, because every pose arrives as a square canvas and is fitted
- * into its cell by its own content rather than by the canvas it came on.
+ * Cells start square and are reshaped once the art has been measured, by
+ * [PoseSheetPlan.fittedTo]. Nothing is known about the figure's proportions at
+ * planning time -- not one frame has been drawn -- so the size asked for here
+ * is the height budget, and the width is settled later by what turned up.
  */
 object PoseSheetPlanner {
 
@@ -116,7 +168,8 @@ object PoseSheetPlanner {
         }
 
         return PoseSheetPlan(
-            cellSize = size,
+            cellWidth = size,
+            cellHeight = size,
             columns = columns,
             rows = rows.size,
             cells = cells,
@@ -134,17 +187,23 @@ object PoseSheetPlanner {
     }
 
     /**
-     * 96 pixels a cell.
+     * 192 pixels tall a cell.
      *
-     * The sprite is drawn about a tile and a half wide on screen, so 96 is
-     * already more than is shown and leaves room for a player who zooms in.
-     * Going to 128 doubles the sheet's memory for detail nobody sees at this
-     * camera; going to 64 starts to lose the outline that makes a character
-     * read against terrain.
+     * This was 96, reasoning that the sprite is drawn about a tile and a half
+     * wide and anything more is detail nobody sees. Both halves of that were
+     * wrong. A square 96 cell gave an idle figure 34 pixels across, so the
+     * number that mattered was never the cell -- and a sheet is authored once
+     * and then looked at in an editor, zoomed, and rescaled for other
+     * densities, none of which the on-screen size governs.
+     *
+     * Doubling the height is what buys the detail: four times the pixels on
+     * the character. Cutting the width to the figure is what pays for it, by
+     * not storing the empty background that a square cell spends half its
+     * area on. Together the sheet grows a little over twice, not four times.
      */
-    const val DEFAULT_CELL = 96
+    const val DEFAULT_CELL = 192
 
     /** Below this a character has no silhouette; above it, no sheet fits in a texture. */
     const val MIN_CELL = 32
-    const val MAX_CELL = 256
+    const val MAX_CELL = 512
 }
