@@ -105,8 +105,10 @@ class PoseForgeViewModel(
 
     fun updateSubject(subject: String) {
         val setId = setIdFor(subject, _state.value.role)
+        val poses = setId?.let(posesDrawn).orEmpty()
         _state.value = _state.value.copy(
             subject = subject,
+            drawsAwayView = poses.anyAway() || _state.value.drawsAwayView,
             setId = setId,
             // Typing a subject that was worked on before finds its poses again,
             // which is what makes coming back to a character cheap. Asked as an
@@ -468,13 +470,24 @@ class PoseForgeViewModel(
             return
         }
 
+        // Counted against every angle this character *could* have, not the
+        // ones the toggle happens to be showing.
+        //
+        // The script is built from the toggle, and the toggle is UI state: it
+        // is off by default and nothing restored it when a character was
+        // reopened. So a set generated with away frames, closed and opened
+        // again, packed as front-only -- the away art was on disk, was paid
+        // for, and the sheet quietly left it out. What exists on disk is the
+        // only honest answer to what the sheet should contain.
+        val onDisk = current.scope.scriptFor(current.frames, PoseView.entries)
+
         // Only the states that actually have frames, and only as many as
         // arrived: a row planned for four and given two would leave two cells
-        // of nothing in the middle of the animation.
-        // Counted per view by the script itself. The view model used to do
-        // this arithmetic too, and having two copies is how it came to be
-        // right in one of them and wrong in the other.
-        val counts = current.script.drawnCounts(drawn)
+        // of nothing in the middle of the animation. Counted per view by the
+        // script itself; the view model used to do this arithmetic too, and
+        // having two copies is how it came to be right in one and wrong in
+        // the other.
+        val counts = onDisk.drawnCounts(drawn)
 
         val plan = PoseSheetPlanner.plan(
             id = setId,
@@ -485,7 +498,7 @@ class PoseForgeViewModel(
             // rows for an away view nobody drew would leave the bottom half
             // of the sheet empty and the renderer would walk the character
             // north as a hole in the world.
-            views = current.script.drawnViews(drawn)
+            views = onDisk.drawnViews(drawn)
                 .ifEmpty { listOf(PoseView.FRONT) }
                 .map { it.keySuffix to it.serves },
         )
@@ -550,9 +563,14 @@ class PoseForgeViewModel(
      * behind a spelling test.
      */
     fun openCharacter(character: SavedCharacter) {
+        val poses = posesDrawn(character.setId)
         _state.value = _state.value.copy(
             subject = character.name,
             setId = character.setId,
+            // Read off the poses rather than left as whatever the toggle was:
+            // a character with away frames should say so when it is opened,
+            // not look like one that never had any.
+            drawsAwayView = poses.anyAway(),
             // Read back off the id rather than left as whatever was last
             // picked: opening an enemy and then generating would otherwise
             // write the next frames into the hero's set.
@@ -620,6 +638,10 @@ class PoseForgeViewModel(
             _state.value.copy(error = "The poses could not be exported.")
         }
     }
+
+    /** Whether any of these pose keys is an away frame. */
+    private fun Set<String>.anyAway(): Boolean =
+        any { it.endsWith(PoseView.AWAY.keySuffix) }
 
     private fun setIdFor(subject: String, role: CharacterRole): String? {
         val slug = subject.lowercase().replace(NON_ID, "_").trim('_').take(MAX_SLUG)

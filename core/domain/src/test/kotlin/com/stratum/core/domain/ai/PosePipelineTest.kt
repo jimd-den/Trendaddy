@@ -472,6 +472,70 @@ class PoseSheetPlannerTest {
     }
 
     @Test
+    fun `away art on disk reaches the sheet even when nobody asked for it`() {
+        // The failure: the script is built from a toggle, the toggle is UI
+        // state that defaults to off and was not restored when a character was
+        // reopened -- so a set generated with away frames packed as front-only
+        // and the away art, already paid for, was quietly left out.
+        //
+        // Counting against every angle a character *could* have is what makes
+        // the sheet follow the disk instead of following a checkbox.
+        val full = PoseScript.full(views = PoseView.entries)
+        val drawn = full.steps.map { it.key }.toSet()
+
+        // The front-only script -- what the toggle would have produced -- can
+        // see none of the away work.
+        val frontOnly = PoseScript.full(views = listOf(PoseView.FRONT))
+        assertEquals(listOf(PoseView.FRONT), frontOnly.drawnViews(drawn))
+        assertEquals(listOf(PoseView.FRONT, PoseView.AWAY), full.drawnViews(drawn))
+
+        val plan = assertNotNull(
+            PoseSheetPlanner.plan(
+                id = "t",
+                name = "T",
+                frameCounts = full.drawnCounts(drawn),
+                views = full.drawnViews(drawn).map { it.keySuffix to it.serves },
+            ),
+        )
+        assertEquals(14, plan.rows, "the away block was left out of the sheet")
+        assertTrue(plan.cells.any { it.key.endsWith("_away") })
+    }
+
+    @Test
+    fun `every facing reaches art, and the two drawn angles differ`() {
+        // The end of the chain: a sheet is only useful if asking it for a
+        // direction lands on the right half of it. All four world facings have
+        // to resolve, the two that share a drawn angle have to agree, and the
+        // front and away pairs have to disagree -- otherwise the back art is
+        // on the sheet and nothing ever reads it.
+        val full = PoseScript.full(views = PoseView.entries)
+        val drawn = full.steps.map { it.key }.toSet()
+        val sheet = assertNotNull(
+            PoseSheetPlanner.plan(
+                id = "t",
+                name = "T",
+                frameCounts = full.drawnCounts(drawn),
+                views = full.drawnViews(drawn).map { it.keySuffix to it.serves },
+            ),
+        ).sheet
+
+        val walk = assertNotNull(sheet.clip(AnimationState.WALK))
+        val frame = walk.firstFrame + 1
+        val south = sheet.frameFor(frame, SpriteFacing.SOUTH_EAST)
+        val southWest = sheet.frameFor(frame, SpriteFacing.SOUTH_WEST)
+        val north = sheet.frameFor(frame, SpriteFacing.NORTH_EAST)
+        val northWest = sheet.frameFor(frame, SpriteFacing.NORTH_WEST)
+
+        assertEquals(south, southWest, "the two front facings read different art")
+        assertEquals(north, northWest, "the two away facings read different art")
+        assertTrue(north != south, "walking away read the front art")
+        // And every one of them is a frame the sheet actually has.
+        listOf(south, southWest, north, northWest).forEach {
+            assertTrue(it in 0 until sheet.columns * sheet.rows, "frame $it is off the sheet")
+        }
+    }
+
+    @Test
     fun `nothing to draw is no plan`() {
         assertNull(PoseSheetPlanner.plan("t", "T", emptyMap()))
         assertNull(PoseSheetPlanner.plan("t", "T", mapOf(AnimationState.IDLE to 0)))

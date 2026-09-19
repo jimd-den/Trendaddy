@@ -79,7 +79,20 @@ class SpriteMapperViewModel(
             activeState = atlas.mappedStates.firstOrNull() ?: AnimationState.IDLE,
             report = SpriteValidation.validate(atlas),
             savedSheet = null,
-            message = if (existing != null) "Picked up where you left off." else null,
+            message = when {
+                // Said on the way in, not discovered on the way out. The baker
+                // lays a sheet out one clip per row, and the extra angles are
+                // not in any clip -- they are reached by a row offset the
+                // baker does not carry. So re-baking a two-angle sheet keeps
+                // the front and drops the back, and the only symptom is a
+                // character that used to turn around and no longer does.
+                sheet.facingRows.values.any { it > 0 } ->
+                    "This sheet has a second set of rows for the away angle. Re-baking " +
+                        "keeps the front only — map it if you need to, but keep the " +
+                        "packed copy if you want the character to turn around."
+                existing != null -> "Picked up where you left off."
+                else -> null
+            },
             error = null,
         )
     }

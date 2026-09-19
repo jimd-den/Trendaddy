@@ -160,7 +160,21 @@ class EnemyDirector(
             else -> enemy.position
         }
 
-        return enemy.copy(position = moved, state = state, attackCooldown = cooled)
+        // Kept from the last step that actually happened. A monster blocked
+        // against a wall, or standing in reach and swinging, should hold the
+        // way it was already turned rather than snapping back to a default.
+        val dx = moved.x - enemy.position.x
+        val dy = moved.y - enemy.position.y
+        val turned = if (dx * dx + dy * dy > TURN_EPSILON) {
+            enemy.copy(facingX = dx, facingY = dy)
+        } else if (state == EnemyState.ATTACKING) {
+            // Except when swinging: it is looking at what it is hitting.
+            enemy.copy(facingX = target.x - enemy.position.x, facingY = target.y - enemy.position.y)
+        } else {
+            enemy
+        }
+
+        return turned.copy(position = moved, state = state, attackCooldown = cooled)
     }
 
     /**
@@ -212,6 +226,16 @@ class EnemyDirector(
         const val STEP_UP = 1
         const val DEFAULT_AGGRO = 8
         const val DEFAULT_SPEED = 2.2f
+
+        /**
+         * Below this a step is not a turn.
+         *
+         * A monster closing the last fraction of an inch towards its reach
+         * moves by almost nothing, and dividing by that would make its facing
+         * flap between frames -- which on a sheet with back art is a body
+         * spinning on the spot.
+         */
+        private const val TURN_EPSILON = 1e-6f
     }
 }
 

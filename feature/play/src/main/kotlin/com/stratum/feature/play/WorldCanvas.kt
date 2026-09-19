@@ -295,7 +295,12 @@ fun WorldCanvas(
                         drawSprite(
                             x, y + dip, projection, sprite,
                             animationFor(actor.enemy.instanceId),
-                            SpriteFacing.of(0, 1),
+                            // The way it is actually going. This was one fixed
+                            // direction for every monster, so a character with
+                            // drawn back art still ran at you face-first while
+                            // heading north, and the second half of its sheet
+                            // was never reached.
+                            facingOf(actor.enemy.facingX, actor.enemy.facingY),
                             flashFor(actor.enemy.instanceId),
                         )
                         drawEnemyOverlay(x, y, projection, actor.enemy)
@@ -1105,4 +1110,16 @@ data class DrawableWeapon(
     val sprite: WeaponSprite,
     val image: ImageBitmap,
     val rig: WeaponRig,
+)
+
+/**
+ * A direction in world space as one of the four drawn angles.
+ *
+ * Rounded away from zero rather than truncated: a monster drifting north at a
+ * fraction of a tile per frame is still going north, and truncating would call
+ * that no movement at all and leave it facing whatever the default is.
+ */
+private fun facingOf(dx: Float, dy: Float): SpriteFacing = SpriteFacing.of(
+    if (dx > 0f) 1 else if (dx < 0f) -1 else 0,
+    if (dy > 0f) 1 else if (dy < 0f) -1 else 0,
 )

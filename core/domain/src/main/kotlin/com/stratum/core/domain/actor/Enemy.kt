@@ -66,6 +66,18 @@ data class EnemyInstance(
     val attackCooldown: Float = 0f,
     val experience: Int = 10,
     val bodyColor: Long = 0xFF8A3B3B,
+    /**
+     * The way it last moved, as a unit-ish step.
+     *
+     * Kept because the renderer has to know which way a body is turned and
+     * had no way to ask: it passed one fixed direction for every monster, so
+     * a character with drawn back art still charged at you face-first while
+     * running north. Held as the last movement rather than as a bearing to
+     * the player, because a monster that is fleeing is facing away from what
+     * it is running from.
+     */
+    val facingX: Float = 0f,
+    val facingY: Float = 1f,
 ) {
     val isAlive: Boolean get() = health > 0 && state != EnemyState.DEAD
 
