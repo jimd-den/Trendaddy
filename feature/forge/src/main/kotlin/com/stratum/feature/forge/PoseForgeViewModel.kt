@@ -198,7 +198,21 @@ class PoseForgeViewModel(
     fun selectRole(role: CharacterRole) {
         val current = _state.value
         val setId = setIdFor(current.subject, role)
+        val moved = setId?.let(posesDrawn).orEmpty()
+        // Said, because the drawn count is about to change under them. The
+        // role is part of the id, so switching it points at a different set --
+        // and a screen that silently went from forty poses to none reads as
+        // having deleted them.
+        val note = when {
+            setId == null -> null
+            current.drawn.isNotEmpty() && moved.isEmpty() ->
+                "That is a different character: ${role.label.lowercase()} art is filed " +
+                    "separately. The ${current.drawn.size} pose(s) you drew are still there " +
+                    "under the other one."
+            else -> null
+        }
         _state.value = current.copy(
+            message = note,
             role = role,
             setId = setId,
             hasReference = setId?.let(hasReference) ?: false,
@@ -706,12 +720,21 @@ enum class CharacterRole(val label: String, val namespace: String) {
     ENEMY("Enemy", SpriteNamespace.MONSTER),
 }
 
+/**
+ * How many animations to draw.
+ *
+ * Labelled by what it does rather than by who it is for. It used to be
+ * "Enemy" and "Full character", sitting one row above a Hero/Enemy chip row
+ * that decides something else entirely -- two chips reading "Enemy", side by
+ * side, controlling different things. Tapping either looked like the other had
+ * changed on its own.
+ */
 enum class PoseScope(val label: String) {
     /** Idle, walk, attack, death: what an enemy is actually seen doing. */
-    ENEMY("Enemy"),
+    ENEMY("4 animations"),
 
     /** Everything, for the character a player looks at all session. */
-    FULL("Full character");
+    FULL("All 7");
 
     /** The script for this scope at the frame counts and angles the person chose. */
     fun scriptFor(
@@ -738,8 +761,16 @@ data class PoseForgeUiState(
     val subject: String = "",
     val style: String = "",
     val scope: PoseScope = PoseScope.ENEMY,
-    /** Whether this character is the player's or something it meets. */
-    val role: CharacterRole = CharacterRole.ENEMY,
+    /**
+     * Whether this character is the player's or something it meets.
+     *
+     * A hero by default. It used to default to enemy, which meant a character
+     * drawn by somebody who never touched the chip was filed under the monster
+     * namespace -- and the main screen, which lists art a player can wear,
+     * never saw it. The commonest thing to make is the character you play, and
+     * an enemy is the deliberate choice.
+     */
+    val role: CharacterRole = CharacterRole.HERO,
     /**
      * How many frames each animation gets.
      *
