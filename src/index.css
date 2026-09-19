@@ -1,0 +1,62 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --color-surface: #14110E;
+    --color-surface-raised: #211C16;
+    --color-surface-sunken: #0D0B09;
+    --color-ink: #F4EBDC;
+    --color-ink-muted: #A1907A;
+    --color-accent: #CD7F32;
+    --color-accent-alt: #00B8A9;
+    --color-danger: #C1453B;
+  }
+
+  * {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    background-color: var(--color-surface);
+    color: var(--color-ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    user-select: none;
+    touch-action: manipulation;
+  }
+}
+
+/* Stratum Cut Corners */
+.cut-corner-sm {
+  clip-path: polygon(
+    6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px
+  );
+}
+
+.cut-corner-md {
+  clip-path: polygon(
+    10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px
+  );
+}
+
+.cut-corner-lg {
+  clip-path: polygon(
+    14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px
+  );
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #14110E;
+}
+::-webkit-scrollbar-thumb {
+  background: #2E271F;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #CD7F32;
+}
