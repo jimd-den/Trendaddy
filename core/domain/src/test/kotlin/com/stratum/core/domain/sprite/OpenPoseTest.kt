@@ -156,20 +156,24 @@ class OpenPoseConversionTest {
     }
 
     @Test
-    fun `the pelvis and chest do not survive the round trip, and need not`() {
+    fun `the pelvis and chest survive the round trip once the camera is real`() {
         // OpenPose has no pelvis and no chest; both are rebuilt on import from
-        // the joints it does carry. The pelvis lands at the midpoint of the
-        // hips, which this skeleton deliberately offsets to sell the
-        // three-quarter angle, so it comes back shifted by half that skew.
+        // the joints it does carry, by taking the midpoint of the hips and of
+        // the shoulders.
         //
-        // Harmless, and worth pinning rather than papering over: nothing rigs a
-        // weapon or draws a limb from the pelvis. It is an internal root, and
-        // the limbs that hang off it all round-trip exactly.
+        // That midpoint used to come back shifted, and this test pinned the
+        // shift rather than papering over it: the far side of the body was
+        // nudged sideways by a constant to fake a three-quarter angle, and a
+        // nudge applied to one side only does not have a midpoint where the
+        // spine is. Projecting properly removed it. A projection is linear, so
+        // the picture of the midpoint of two hips is the midpoint of the
+        // pictures -- the root reconstructs exactly, for free, and the drift
+        // was never a fact about OpenPose but about the fake.
         val original = skeleton.pose(PoseAngles())
         val returned = assertNotNull(OpenPoseImport.toPose(OpenPoseExport.fromPose(original)))
 
         val drift = returned.require(Joint.PELVIS).x - original.require(Joint.PELVIS).x
-        assertEquals(skeleton.threeQuarterSkew / 2f, drift, 0.002f)
+        assertEquals(0f, drift, 0.002f, "the pelvis no longer reconstructs where it was")
         // The hips themselves are exact, which is what the legs hang from.
         assertEquals(
             original.require(Joint.HIP_NEAR).x,

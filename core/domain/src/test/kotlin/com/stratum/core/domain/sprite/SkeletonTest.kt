@@ -11,19 +11,27 @@ class SkeletonTest {
     private val skeleton = Skeleton()
 
     @Test
-    fun `an arm at zero hangs straight down and at ninety reaches out to the near side`() {
+    fun `an arm at zero hangs straight down and at ninety reaches towards the viewer`() {
         // The whole authoring convention in one test, because every pose in the
         // library is written against it and a silent flip would mirror the lot.
+        //
+        // The angles are swings in the plane a limb actually swings in --
+        // forward and back -- and the camera decides what that looks like.
+        // Ninety degrees is an arm held out in front of the character, and the
+        // character faces the bottom-right of the frame, so the hand goes down
+        // and to the right. It used to go flat across the picture, which is
+        // what a front-on figure does and what this guide must never be.
         val down = skeleton.pose(PoseAngles(shoulderNear = 0f, elbowNear = 0f))
         val shoulder = down.require(Joint.SHOULDER_NEAR)
         val hand = down.require(Joint.HAND_NEAR)
-        assertEquals(shoulder.x, hand.x, 0.001f)
+        assertEquals(shoulder.x, hand.x, 0.001f, "an arm at rest did not hang plumb")
         assertTrue(hand.y > shoulder.y, "an arm at zero did not hang downward")
 
         val out = skeleton.pose(PoseAngles(shoulderNear = 90f, elbowNear = 0f))
         val reached = out.require(Joint.HAND_NEAR)
-        assertEquals(out.require(Joint.SHOULDER_NEAR).y, reached.y, 0.001f)
-        assertTrue(reached.x > out.require(Joint.SHOULDER_NEAR).x, "90 did not reach the near side")
+        val from = out.require(Joint.SHOULDER_NEAR)
+        assertTrue(reached.x > from.x, "reaching forward did not come round to the right")
+        assertTrue(reached.y > from.y, "reaching forward did not come towards the viewer")
     }
 
     @Test
@@ -42,20 +50,35 @@ class SkeletonTest {
         )
         val pose = skeleton.pose(extreme)
 
-        assertEquals(
+        // A ceiling, not a range. The guide is a picture of a body, and a
+        // picture foreshortens: a bone across the frame is seen at its full
+        // length, the same bone pointing at the camera is seen as almost
+        // nothing, and everything between is legitimate. So there is no useful
+        // floor -- a forearm aimed down the lens really is a dot -- but there
+        // is a ceiling, and a bone that exceeds it is a bone a pose stretched,
+        // which is the failure this guards.
+        fun assertBone(bone: Float, seen: Float, name: String) {
+            val longest = bone / IsoProjection.heightScale
+            assertTrue(seen > 0f, "$name vanished entirely")
+            assertTrue(
+                seen <= longest + 0.0005f,
+                "$name is $seen on screen, longer than a $bone bone can ever look",
+            )
+        }
+        assertBone(
             skeleton.upperArm,
             pose.require(Joint.SHOULDER_NEAR).distanceTo(pose.require(Joint.ELBOW_NEAR)),
-            0.0005f,
+            "the upper arm",
         )
-        assertEquals(
+        assertBone(
             skeleton.foreArm,
             pose.require(Joint.ELBOW_NEAR).distanceTo(pose.require(Joint.HAND_NEAR)),
-            0.0005f,
+            "the forearm",
         )
-        assertEquals(
+        assertBone(
             skeleton.shin,
             pose.require(Joint.KNEE_FAR).distanceTo(pose.require(Joint.FOOT_FAR)),
-            0.0005f,
+            "the shin",
         )
     }
 
@@ -73,12 +96,28 @@ class SkeletonTest {
     }
 
     @Test
-    fun `the far side is offset, so the guide never reads as a flat front view`() {
+    fun `the two shoulders sit at different depths, so the guide is never square on`() {
+        // A flat front view is the one angle the art must not come back as,
+        // and a stick figure whose shoulders sit on one row is exactly that.
+        //
+        // It used to be faked: the far shoulder was nudged sideways by a
+        // constant. Now the body has a real across-the-body axis and the
+        // camera does the work, which means the two shoulders differ in
+        // *height* as well -- the near one is closer to the camera, so it
+        // hangs lower in the frame. That difference is the three-quarter view,
+        // and it is the thing a constant could not produce.
         val pose = skeleton.pose(PoseAngles())
         val near = pose.require(Joint.SHOULDER_NEAR)
         val far = pose.require(Joint.SHOULDER_FAR)
-        assertTrue(near.x - far.x < 2 * skeleton.shoulderHalfWidth, "the shoulders are square on")
-        assertTrue(far.x < near.x, "the far shoulder ended up on the near side")
+
+        assertTrue(near.y > far.y, "the shoulders sat on one row, which is a front view")
+        assertTrue(
+            near.x - far.x < 2 * skeleton.shoulderHalfWidth,
+            "the shoulders are as far apart as they would be square on",
+        )
+        // Facing the bottom-right puts the nearer side of the body to the
+        // left, which is simply where that camera puts it.
+        assertTrue(near.x < far.x, "the near shoulder was not on the side nearest the camera")
     }
 
     @Test
@@ -97,11 +136,81 @@ class WeaponGripTest {
     private val skeleton = Skeleton()
 
     @Test
-    fun `a weapon in a hand continues the line of the forearm`() {
-        // Arm out to the near side: the forearm points along +x, so a weapon
-        // drawn pointing up must turn a quarter turn clockwise to follow it.
+    fun `a weapon in a hand continues the line of the forearm as it is drawn`() {
+        // Arm held out in front of the character. A quarter turn was the right
+        // answer while the guide was flat, and is the wrong one now: the
+        // weapon is a picture laid over a picture, so it has to follow the
+        // forearm's direction *on screen*, not the direction the arm points in
+        // the world. An arm reaching towards the viewer is foreshortened, and
+        // a weapon rotated as if it were not would leave the hand.
         val pose = skeleton.pose(PoseAngles(shoulderNear = 90f, elbowNear = 0f))
-        assertEquals(90f, pose.weaponGrip().weaponDegrees, 0.5f)
+        val hand = pose.require(Joint.HAND_NEAR)
+        val elbow = pose.require(Joint.ELBOW_NEAR)
+        val degrees = pose.weaponGrip().weaponDegrees
+
+        // Past a quarter turn, because the forearm is running down the frame
+        // as well as across it.
+        assertTrue(degrees > 90f, "the weapon did not follow the arm towards the viewer")
+        assertTrue(degrees < 180f, "the weapon turned past the arm entirely")
+        // And it really is the drawn direction: the hand is below and right of
+        // the elbow, which is what more than a quarter turn means.
+        assertTrue(hand.x > elbow.x && hand.y > elbow.y)
+    }
+
+    @Test
+    fun `a T-pose is expressible, which it was not`() {
+        // The reference every character starts from is a T-pose, and until the
+        // skeleton had a second axis it could not make one: every joint had a
+        // single angle, a swing forward or back, so an arm could reach in
+        // front or behind and never out to the side. Poses that wanted width
+        // faked it by swinging an arm past vertical, which is a figure
+        // clutching at itself rather than one standing with its arms out.
+        val tPose = skeleton.pose(
+            PoseAngles(
+                shoulderNear = 0f, shoulderNearOut = 90f,
+                shoulderFar = 0f, shoulderFarOut = 90f,
+            ),
+        )
+        val chest = tPose.require(Joint.CHEST)
+        val nearHand = tPose.require(Joint.HAND_NEAR)
+        val farHand = tPose.require(Joint.HAND_FAR)
+
+        // Both arms out, on opposite sides of the body.
+        assertTrue(nearHand.x < chest.x, "the near arm did not reach out to its own side")
+        assertTrue(farHand.x > chest.x, "the far arm did not reach out to its own side")
+
+        // And not level, which is the point of drawing it at this camera: an
+        // arm held straight out to the near side is coming towards the viewer,
+        // so it drops down the frame, while the far arm recedes and rides up.
+        // A T-pose with both hands on one row is a T-pose seen square on,
+        // which is the angle none of this art is drawn at.
+        assertTrue(nearHand.y > farHand.y, "the arms came out level, which is a front view")
+
+        // Neither arm is merely hanging, though -- they are out, not down.
+        val shoulder = tPose.require(Joint.SHOULDER_NEAR)
+        val armLength = (skeleton.upperArm + skeleton.foreArm)
+        assertTrue(
+            nearHand.y - shoulder.y < armLength * 0.5f,
+            "the arm hung rather than reached",
+        )
+
+        // And the span is most of the arm: an arm out to the side is not
+        // foreshortened much by this camera, which is exactly why a reference
+        // pose uses one.
+        val span = farHand.x - nearHand.x
+        assertTrue(span > 2f * (skeleton.upperArm + skeleton.foreArm) * 0.6f, "span was $span")
+    }
+
+    @Test
+    fun `lifting a limb sideways cannot change its length`() {
+        // The new axis has the same guarantee as the old one: it turns a bone,
+        // it does not stretch one.
+        val out = skeleton.pose(PoseAngles(shoulderNear = 20f, shoulderNearOut = 55f))
+        val upper = out.require(Joint.SHOULDER_NEAR).distanceTo(out.require(Joint.ELBOW_NEAR))
+        assertTrue(
+            upper <= skeleton.upperArm / IsoProjection.heightScale + 0.0005f,
+            "lifting the arm out stretched it to $upper",
+        )
     }
 
     @Test
