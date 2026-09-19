@@ -461,12 +461,26 @@ private fun CharacterPanel(
                 )
                 PoseScript.FRAME_CHOICES.forEach { count ->
                     StratumChip(
-                        label = "$count",
+                        // Shown as what it costs, not as what it stores. With
+                        // both angles on, twelve frames is twenty-four
+                        // generations for this one animation, and that is the
+                        // number worth seeing before starting rather than
+                        // after paying.
+                        label = if (state.drawsAwayView) "$count (${count * 2})" else "$count",
                         selected = state.framesFor(animation) == count,
                         onClick = { onFramesChange(animation, count) },
                     )
                 }
             }
+        }
+
+        if (state.drawsAwayView) {
+            Spacer(Modifier.height(Space.small))
+            Text(
+                text = "In brackets: generations for that animation, both angles counted.",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.inkMuted,
+            )
         }
 
         Spacer(Modifier.height(Space.small))

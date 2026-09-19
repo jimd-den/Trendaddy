@@ -390,6 +390,88 @@ class PoseSheetPlannerTest {
     }
 
     @Test
+    fun `a twelve frame character with an away view plans no empty cells`() {
+        // The reported failure, exactly: twelve frames a state with away
+        // views, every pose drawn, and the sheet came back saying a hundred
+        // and sixty-eight poses could not be read. Counting frames across
+        // both views doubled the column count, so every row was planned twice
+        // as wide as the animation in it and the second half of each row
+        // named poses that were never asked for.
+        val frames = AnimationState.entries.associateWith { 12 }
+        val script = PoseScript.full(frames, views = listOf(PoseView.FRONT, PoseView.AWAY))
+        val drawn = script.steps.map { it.key }.toSet()
+        assertEquals(168, drawn.size, "the run itself is 12 x 7 x 2")
+
+        val counts = script.drawnCounts(drawn)
+        assertTrue(
+            counts.values.all { it == 12 },
+            "a state was counted as ${counts.values.distinct()} frames, not 12",
+        )
+
+        val plan = assertNotNull(
+            PoseSheetPlanner.plan(
+                id = "t",
+                name = "T",
+                frameCounts = counts,
+                views = script.drawnViews(drawn).map { it.keySuffix to it.serves },
+            ),
+        )
+        assertEquals(12, plan.columns)
+        assertEquals(14, plan.rows, "seven states, two views")
+
+        // The real assertion: every cell the sheet plans has a pose behind it.
+        val orphans = plan.cells.filterNot { it.key in drawn }
+        assertTrue(orphans.isEmpty(), "${orphans.size} cells had no pose: ${orphans.take(4)}")
+        assertEquals(drawn.size, plan.cells.size)
+    }
+
+    @Test
+    fun `a half-drawn away block does not narrow the animation`() {
+        // An away view one frame short should report that one frame missing,
+        // not quietly cut a column off every animation in the sheet.
+        val frames = mapOf(AnimationState.IDLE to 6)
+        val script = PoseScript.of(
+            listOf(AnimationState.IDLE),
+            frames,
+            views = listOf(PoseView.FRONT, PoseView.AWAY),
+        )
+        val drawn = script.steps.map { it.key }.toSet() - "idle_5_away"
+
+        assertEquals(6, script.drawnCounts(drawn)[AnimationState.IDLE])
+        val plan = assertNotNull(
+            PoseSheetPlanner.plan(
+                id = "t",
+                name = "T",
+                frameCounts = script.drawnCounts(drawn),
+                views = script.drawnViews(drawn).map { it.keySuffix to it.serves },
+            ),
+        )
+        assertEquals(6, plan.columns)
+        assertEquals(listOf("idle_5_away"), plan.cells.map { it.key }.filterNot { it in drawn })
+    }
+
+    @Test
+    fun `a front-only run plans a front-only sheet`() {
+        val script = PoseScript.full(views = listOf(PoseView.FRONT, PoseView.AWAY))
+        // Only the front was drawn before the run was stopped.
+        val drawn = script.stepsFor(PoseView.FRONT).map { it.key }.toSet()
+
+        assertEquals(listOf(PoseView.FRONT), script.drawnViews(drawn))
+        val plan = assertNotNull(
+            PoseSheetPlanner.plan(
+                id = "t",
+                name = "T",
+                frameCounts = script.drawnCounts(drawn),
+                views = script.drawnViews(drawn).map { it.keySuffix to it.serves },
+            ),
+        )
+        // Seven rows, not fourteen: planning the away block would leave half
+        // the sheet empty and the character would walk north as a hole.
+        assertEquals(7, plan.rows)
+        assertTrue(plan.cells.all { it.key in drawn })
+    }
+
+    @Test
     fun `nothing to draw is no plan`() {
         assertNull(PoseSheetPlanner.plan("t", "T", emptyMap()))
         assertNull(PoseSheetPlanner.plan("t", "T", mapOf(AnimationState.IDLE to 0)))

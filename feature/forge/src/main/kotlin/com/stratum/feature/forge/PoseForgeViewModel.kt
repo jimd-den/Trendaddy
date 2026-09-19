@@ -471,9 +471,10 @@ class PoseForgeViewModel(
         // Only the states that actually have frames, and only as many as
         // arrived: a row planned for four and given two would leave two cells
         // of nothing in the middle of the animation.
-        val counts = current.script.states.associateWith { state ->
-            current.script.stepsFor(state).count { it.key in drawn }
-        }.filterValues { it > 0 }
+        // Counted per view by the script itself. The view model used to do
+        // this arithmetic too, and having two copies is how it came to be
+        // right in one of them and wrong in the other.
+        val counts = current.script.drawnCounts(drawn)
 
         val plan = PoseSheetPlanner.plan(
             id = setId,
@@ -484,10 +485,7 @@ class PoseForgeViewModel(
             // rows for an away view nobody drew would leave the bottom half
             // of the sheet empty and the renderer would walk the character
             // north as a hole in the world.
-            views = current.views
-                .filter { view ->
-                    current.script.stepsFor(view).any { it.key in drawn }
-                }
+            views = current.script.drawnViews(drawn)
                 .ifEmpty { listOf(PoseView.FRONT) }
                 .map { it.keySuffix to it.serves },
         )

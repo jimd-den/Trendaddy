@@ -242,6 +242,24 @@ fun StratumApp(
         resolve
     }
 
+    // Remembered on the resolver rather than rebuilt each recomposition, so
+    // the portrait below can be keyed on it: a lambda made fresh every frame
+    // would make `remember` re-decode the sheet on every recomposition, and a
+    // lambda that never changed would never notice new art.
+    val heroPortrait: (String) -> DrawableSprite? = remember(spriteResolver) {
+        // Resolved through the same path the world uses, so what is shown is
+        // what will actually be drawn -- a preview from somewhere else would
+        // be a promise the run need not keep.
+        //
+        // No guard on which class was asked for. There used to be one,
+        // comparing against the raw chosen id, and that id is null until
+        // somebody taps a class while the screen falls back to the first one
+        // for display -- so on a fresh launch the comparison always failed and
+        // the main screen showed no character at all. It was redundant as well
+        // as wrong: this is only ever asked about the class already selected.
+        { _: String -> spriteResolver(SpriteKey.Player) }
+    }
+
     when (destination) {
         Destination.HOME -> HomeScreen(
             packName = content.packs.joinToString(" + ") { it.name },
@@ -251,13 +269,7 @@ fun StratumApp(
             heroClasses = content.heroClasses,
             selectedClassId = heroClassId ?: content.heroClasses.firstOrNull()?.id,
             onSelectClass = { heroClassId = it },
-            idleFrameFor = { classId ->
-                // Resolved through the same path the world uses, so what is
-                // shown here is what will actually be drawn -- a preview that
-                // came from somewhere else would be a promise the run need
-                // not keep.
-                spriteResolver(SpriteKey.Player).takeIf { classId == heroClassId }
-            },
+            idleFrameFor = heroPortrait,
             onBuildClass = { destination = Destination.CLASSES },
             onDescend = {
                 seed = System.currentTimeMillis()
@@ -753,10 +765,23 @@ private fun HomeScreen(
                     // afford. A name in a list says which class; it does not
                     // say which of the four characters you drew this is, and
                     // that is the thing a person actually chooses by.
-                    val drawn = remember(hero.id, selectedClassId) { idleFrameFor(hero.id) }
+                    val drawn = remember(hero.id, selectedClassId, idleFrameFor) {
+                        idleFrameFor(hero.id)
+                    }
+                    Spacer(Modifier.height(Space.medium))
                     if (drawn != null) {
-                        Spacer(Modifier.height(Space.medium))
                         IdlePortrait(drawn, modifier = Modifier.fillMaxWidth())
+                    } else {
+                        // Said rather than left blank. An empty space where a
+                        // character should be reads as the feature being
+                        // broken; naming the reason turns it into the next
+                        // thing to do.
+                        Text(
+                            text = "No art yet — this class will be drawn as a shape. " +
+                                "Make a character in the pose forge to see it here.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.inkMuted,
+                        )
                     }
                     Spacer(Modifier.height(Space.small))
                     Text(

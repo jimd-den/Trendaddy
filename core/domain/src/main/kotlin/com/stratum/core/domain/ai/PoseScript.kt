@@ -55,6 +55,33 @@ data class PoseScript(val steps: List<PoseStep>) {
 
     fun stepsFor(view: PoseView): List<PoseStep> = steps.filter { it.view == view }
 
+    /**
+     * How many frames each animation actually has drawn, per view.
+     *
+     * The sheet's column count comes from this, and it has to be counted
+     * *within* one view. Counting across them doubles it, and the symptom is
+     * brutal and silent: a sheet planned twice as wide as the animation it
+     * holds, with every second half-row a cell whose pose was never asked for.
+     * A twelve frame character with an away view reported a hundred and
+     * sixty-eight unreadable poses, which is exactly twelve missing columns
+     * times seven states times two views.
+     *
+     * Taken as the largest count any single view has, so an away block that
+     * came back one frame short still gets a sheet wide enough for the front
+     * it was drawn to match, and the one missing frame is reported as missing
+     * rather than quietly narrowing every animation.
+     */
+    fun drawnCounts(drawn: Set<String>): Map<AnimationState, Int> =
+        states.associateWith { state ->
+            views.maxOfOrNull { view ->
+                stepsFor(state, view).count { it.key in drawn }
+            } ?: 0
+        }.filterValues { it > 0 }
+
+    /** The views with anything drawn in them, in sheet order. */
+    fun drawnViews(drawn: Set<String>): List<PoseView> =
+        views.filter { view -> stepsFor(view).any { it.key in drawn } }
+
     /** How many frames each state ends up with, which is what the sheet is planned from. */
     fun frameCounts(): Map<AnimationState, Int> =
         states.associateWith { state ->
